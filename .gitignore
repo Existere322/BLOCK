@@ -1,0 +1,16 @@
+/.gradle/
+/.idea/
+*.iml
+/build/
+/app/build/
+/local.properties
+/work/jdk-*/
+/work/android-sdk/
+/work/downloads/
+/work/gradle-*/
+/keystore/*.jks
+/keystore/*.properties
+/keystore/credentials.local.txt
+.DS_Store
+/captures/
+*.apk.idsig

@@ -1,0 +1,5 @@
+-keep class app.shijie.guard.ShijieAccessibilityService { *; }
+-keep class app.shijie.guard.BootReceiver { *; }
+-keep class app.shijie.guard.MaintenanceWorker { *; }
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class *
