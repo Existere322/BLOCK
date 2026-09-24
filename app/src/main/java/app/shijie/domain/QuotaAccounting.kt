@@ -141,11 +141,10 @@ object ForegroundSpans {
 /**
  * Replays foreground time from usage events.
  *
- * Activity switches inside one app emit pause/stop for the old screen after the
- * new screen is already resumed. Those events must not end the package: stop is
- * ignored, and a pause within two seconds of the latest resume is treated as the
- * handoff, not as leaving the app. A resume also means the screen is in use, so a
- * missed screen-on event cannot drop the rest of the day.
+ * Activity switches inside one app resume the new screen before the old one pauses.
+ * A pause ends the package only when no other activity of that package is still
+ * resumed. Stop is ignored. Screen-off ends the open interval; a later resume means
+ * the screen is in use again.
  */
 private class SessionReplay {
     private val resumed = HashMap<String, HashMap<Int, Boolean>>()
@@ -188,12 +187,6 @@ private class SessionReplay {
                 ensureOpen(event.packageName, event.at)
             }
             ForegroundEventKind.PAUSE -> {
-                val resumedAt = lastResumeAt[event.packageName]
-                if (resumedAt != null && !event.at.isBefore(resumedAt) &&
-                    Duration.between(resumedAt, event.at) <= HANDOFF
-                ) {
-                    return
-                }
                 val instances = resumed[event.packageName] ?: return
                 if (instances[event.instanceKey] == true) instances[event.instanceKey] = false
                 if (screenOn) closeIfIdle(event.packageName, event.at, emit)
@@ -227,9 +220,6 @@ private class SessionReplay {
         for ((packageName, start) in closing) emit(packageName, start, at)
     }
 
-    private companion object {
-        val HANDOFF: Duration = Duration.ofSeconds(2)
-    }
 }
 
 enum class ForegroundEventKind { RESUME, PAUSE, STOP, SCREEN_ON, SCREEN_OFF, SHUTDOWN }

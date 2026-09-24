@@ -2,6 +2,7 @@ package app.shijie.guard
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -18,6 +19,8 @@ import app.shijie.R
 import app.shijie.ShijieApp
 import app.shijie.domain.BlockReason
 import app.shijie.domain.EmergencyRelease
+import app.shijie.theme.AppPalettes
+import app.shijie.theme.Palette
 
 class ShijieAccessibilityService : AccessibilityService(), GuardHost {
     private val handler = Handler(Looper.getMainLooper())
@@ -209,6 +212,7 @@ class OverlayController(
         val hint = view.findViewById<TextView>(R.id.overlay_release_hint)
         val input = view.findViewById<EditText>(R.id.overlay_reason_input)
         val release = view.findViewById<Button>(R.id.overlay_release)
+        val colors = AppPalettes.of((service.application as ShijieApp).graph.theme.value)
         title.text = if (current.test) "拦截测试" else "已暂停"
         reason.text = current.appLabel
         detail.text = current.detail
@@ -217,6 +221,7 @@ class OverlayController(
         release.visibility = if (showRelease) View.VISIBLE else View.GONE
         if (!showRelease) {
             hint.text = if (current.test) "确认遮罩可见后，点“我知道了”回到桌面。" else "本组今日已使用应急放行。点“我知道了”后可以继续使用其他应用。"
+            paint(view, colors)
             return
         }
         val elapsed = System.currentTimeMillis() - waitStartedAt
@@ -228,6 +233,37 @@ class OverlayController(
         hint.text = "每组每天只能放行一次。放行 5 分钟，期间仍会计入额度；重启手机会立即取消。"
         if (current.reason == BlockReason.QUOTA_EXHAUSTED) {
             detail.text = current.detail
+        }
+        paint(view, colors)
+    }
+
+    private fun paint(view: View, colors: Palette) {
+        view.findViewById<View>(R.id.overlay_card).background = rounded(colors.white, 16f)
+        val ink = colors.ink
+        val muted = colors.muted
+        view.findViewById<TextView>(R.id.overlay_title).setTextColor(ink)
+        view.findViewById<TextView>(R.id.overlay_reason).setTextColor(ink)
+        view.findViewById<TextView>(R.id.overlay_detail).setTextColor(muted)
+        view.findViewById<TextView>(R.id.overlay_release_hint).setTextColor(muted)
+        val input = view.findViewById<EditText>(R.id.overlay_reason_input)
+        input.setTextColor(ink)
+        input.setHintTextColor(colors.muted2)
+        input.background = rounded(colors.cream, 12f)
+        val release = view.findViewById<Button>(R.id.overlay_release)
+        release.backgroundTintList = null
+        release.setTextColor(ink)
+        release.background = rounded(if (release.isEnabled) colors.cream else colors.track, 16f)
+        val dismiss = view.findViewById<Button>(R.id.overlay_dismiss)
+        dismiss.backgroundTintList = null
+        dismiss.setTextColor(colors.white)
+        dismiss.background = rounded(colors.accent, 16f)
+    }
+
+    private fun rounded(color: Int, radiusDp: Float): GradientDrawable {
+        val density = service.resources.displayMetrics.density
+        return GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = radiusDp * density
         }
     }
 

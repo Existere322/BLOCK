@@ -432,15 +432,27 @@ class UsageAndQuotaTest {
     }
 
     @Test
+    fun aShortVisitIsCounted() {
+        val start = instant("2026-03-04T10:00:00")
+        val end = instant("2026-03-04T11:00:00")
+        val events = listOf(
+            ForegroundEvent("app.game", instant("2026-03-04T10:00:00"), ForegroundEventKind.RESUME, 1),
+            ForegroundEvent("app.game", instant("2026-03-04T10:00:01"), ForegroundEventKind.PAUSE, 1),
+        )
+        val spans = ForegroundSpans.collect(events, start, end)
+        assertEquals(1_000L, spans.sumOf { Duration.between(it.start, it.end).toMillis() })
+    }
+
+    @Test
     fun stopAfterASwitchDoesNotCutTheCurrentScreen() {
         val start = instant("2026-03-04T10:00:00")
         val end = instant("2026-03-04T11:00:00")
         val events = listOf(
-            ForegroundEvent("app.game", instant("2026-03-04T10:00:00"), ForegroundEventKind.RESUME),
-            ForegroundEvent("app.game", instant("2026-03-04T10:20:00"), ForegroundEventKind.RESUME),
-            ForegroundEvent("app.game", instant("2026-03-04T10:20:01"), ForegroundEventKind.PAUSE),
-            ForegroundEvent("app.game", instant("2026-03-04T10:20:02"), ForegroundEventKind.STOP),
-            ForegroundEvent("app.game", instant("2026-03-04T10:50:00"), ForegroundEventKind.PAUSE),
+            ForegroundEvent("app.game", instant("2026-03-04T10:00:00"), ForegroundEventKind.RESUME, 1),
+            ForegroundEvent("app.game", instant("2026-03-04T10:20:00"), ForegroundEventKind.RESUME, 2),
+            ForegroundEvent("app.game", instant("2026-03-04T10:20:01"), ForegroundEventKind.PAUSE, 1),
+            ForegroundEvent("app.game", instant("2026-03-04T10:20:02"), ForegroundEventKind.STOP, 1),
+            ForegroundEvent("app.game", instant("2026-03-04T10:50:00"), ForegroundEventKind.PAUSE, 2),
         )
         val spans = ForegroundSpans.collect(events, start, end)
         assertEquals(50 * 60_000L, spans.sumOf { Duration.between(it.start, it.end).toMillis() })

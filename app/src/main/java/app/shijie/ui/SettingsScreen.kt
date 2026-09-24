@@ -66,7 +66,7 @@ fun SettingsScreen(
         val theme by vm.theme.collectAsStateWithLifecycle()
         Text("外观", color = CafeInk, style = MaterialTheme.typography.titleMedium)
         CafeSegmented(
-            labels = listOf("当前", "原先"),
+            labels = listOf("Ocean", "Coffee"),
             selected = if (theme == AppTheme.PREVIOUS) 1 else 0,
             onSelect = { index ->
                 vm.setTheme(if (index == 1) AppTheme.PREVIOUS else AppTheme.CURRENT)

@@ -15,6 +15,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import app.shijie.domain.AppTheme
+import app.shijie.theme.AppPalettes
+import app.shijie.theme.Palette
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
@@ -44,58 +46,25 @@ private data class ShijiePalette(
     val groups: List<Int>,
 )
 
-private val currentPalette = ShijiePalette(
-    page = Color(0xFFF6F8FC),
-    white = Color(0xFFFFFFFF),
-    ink = Color(0xFF202833),
-    inkSoft = Color(0xFF2F3A4C),
-    muted = Color(0xFF75808F),
-    muted2 = Color(0xFFAFBBCB),
-    accent = Color(0xFF1468E8),
-    cream = Color(0xFFEAF2FF),
-    tan = Color(0xFFD6E6FF),
-    search = Color(0xFF263448),
-    track = Color(0xFFF0F2F6),
-    line = Color(0xFFE4E9F1),
-    green = Color(0xFF2B9E88),
-    groups = listOf(
-        0xFF1468E8.toInt(),
-        0xFF9137D7.toInt(),
-        0xFFF18A27.toInt(),
-        0xFF249A87.toInt(),
-        0xFF5E73D7.toInt(),
-        0xFFE36D79.toInt(),
-        0xFF5C829D.toInt(),
-        0xFF9671A6.toInt(),
-    ),
+private fun Palette.asCompose() = ShijiePalette(
+    page = Color(page),
+    white = Color(white),
+    ink = Color(ink),
+    inkSoft = Color(inkSoft),
+    muted = Color(muted),
+    muted2 = Color(muted2),
+    accent = Color(accent),
+    cream = Color(cream),
+    tan = Color(tan),
+    search = Color(search),
+    track = Color(track),
+    line = Color(line),
+    green = Color(green),
+    groups = groups,
 )
 
-/** Paper, ink, and amber from the first committed theme. */
-private val previousPalette = ShijiePalette(
-    page = Color(0xFFF6F3EC),
-    white = Color(0xFFFFFCF7),
-    ink = Color(0xFF1C2428),
-    inkSoft = Color(0xFF2C4552),
-    muted = Color(0xFF3C4A52),
-    muted2 = Color(0xFFD5DEE3),
-    accent = Color(0xFFA56B12),
-    cream = Color(0xFFF8E6C4),
-    tan = Color(0xFFE7E1D6),
-    search = Color(0xFF1A2830),
-    track = Color(0xFFE7E1D6),
-    line = Color(0xFFD5D0C6),
-    green = Color(0xFF2F6F6A),
-    groups = listOf(
-        0xFF2C4552.toInt(),
-        0xFF5E7381.toInt(),
-        0xFF2F6F6A.toInt(),
-        0xFFC48A2A.toInt(),
-        0xFF8D6E63.toInt(),
-        0xFF3E6B8A.toInt(),
-        0xFF6B5B95.toInt(),
-        0xFFB06A3B.toInt(),
-    ),
-)
+private val currentPalette = AppPalettes.ocean.asCompose()
+private val previousPalette = AppPalettes.coffee.asCompose()
 
 private var activePalette by mutableStateOf(currentPalette)
 

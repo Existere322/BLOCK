@@ -126,6 +126,7 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
         viewModelScope.launch {
             val saved = withContext(Dispatchers.IO) { graph.meta.theme() }
             _theme.value = saved
+            graph.theme.value = saved
             selectPalette(saved)
             _onboarding.value = withContext(Dispatchers.IO) { graph.meta.isOnboardingDone() }
             refresh()
@@ -134,6 +135,7 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
 
     fun setTheme(theme: AppTheme) {
         _theme.value = theme
+        graph.theme.value = theme
         selectPalette(theme)
         viewModelScope.launch {
             withContext(Dispatchers.IO) { graph.meta.setTheme(theme) }
@@ -282,6 +284,7 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
             }
             withContext(Dispatchers.IO) { graph.db.clearAllTables() }
             _theme.value = AppTheme.CURRENT
+            graph.theme.value = AppTheme.CURRENT
             selectPalette(AppTheme.CURRENT)
             _onboarding.value = false
             refresh()

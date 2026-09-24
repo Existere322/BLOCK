@@ -9,12 +9,11 @@ import android.telecom.TelecomManager
 import androidx.room.withTransaction
 import app.shijie.domain.BlockWindow
 import app.shijie.domain.DayPolicy
-import app.shijie.domain.DailyUsageBucket
 import app.shijie.domain.ForegroundEvent
 import app.shijie.domain.ForegroundEventKind
 import app.shijie.domain.ForegroundSpan
 import app.shijie.domain.ForegroundSpans
-import app.shijie.domain.HourAlignment
+import app.shijie.domain.FocusedUsage
 import app.shijie.domain.OpenSession
 import app.shijie.domain.QuotaAccounting
 import app.shijie.domain.RestrictionGroup
@@ -271,11 +270,24 @@ class UsageRepository(
 
     suspend fun reconcile(from: LocalDate, to: LocalDate) = mutex.withLock {
         if (!Permissions.usageGranted(context)) return
-        val today = UsageDay.localDate(clock.now(), clock.zone())
+        val zone = clock.zone()
+        val today = UsageDay.localDate(clock.now(), zone)
         db.usage().deleteBefore(Retention.oldestKeptDate(today).toString())
+        val rangeStart = UsageDay.start(from, zone)
+        val rangeEnd = if (!to.isBefore(today)) clock.now() else UsageDay.nextStart(to, zone)
+        if (!rangeStart.isBefore(rangeEnd)) return
+        val events = readEvents(rangeStart.minus(lookback), rangeEnd) ?: return
+        val flags = applicationFlags()
         var day = from
-        while (!day.isAfter(to)) {
-            reconcileDay(day)
+        while (!day.isAfter(to) && !day.isAfter(today)) {
+            val dayStart = UsageDay.start(day, zone)
+            val dayEnd = if (day == today) clock.now() else UsageDay.nextStart(day, zone)
+            val totals = focusedInRange(events, dayStart, dayEnd, flags)
+            val rows = totals.map { DailyUsageEntity(day.toString(), it.key, it.value) }
+            db.withTransaction {
+                db.usage().deleteDate(day.toString())
+                if (rows.isNotEmpty()) db.usage().upsert(rows)
+            }
             day = day.plusDays(1)
         }
     }
@@ -336,13 +348,11 @@ class UsageRepository(
         val zone = clock.zone()
         val day = UsageDay.localDate(now, zone)
         val start = UsageDay.start(day, zone)
-        val totals = systemTotals(start, now).orEmpty()
-        val events = readEvents(start, now)
+        val events = readEvents(start.minus(lookback), now) ?: return List(24) { HashMap() }
+        val flags = applicationFlags()
         val buckets = List(24) { HashMap<String, Long>() }
-        ForegroundSpans.collect(events, start, now).forEach { span -> addPackageHours(span, zone, buckets) }
-        return HourAlignment.scale(buckets, totals, now.atZone(zone).hour).map { hour ->
-            hour.filterKeys { it in totals }
-        }
+        focusedSpans(events, start, now, flags).forEach { span -> addPackageHours(span, zone, buckets) }
+        return buckets
     }
 
     suspend fun hourlyToday(open: OpenSession?): List<Long> {
@@ -367,55 +377,38 @@ class UsageRepository(
         releases: List<TemporaryOverride>,
         open: OpenSession?,
     ): Long {
-        // 额度直接用系统 UsageStats 的前台时长，不再自行累加事件。
         return systemForegroundToday(packages, open)
     }
 
     suspend fun lastResumedPackage(): String? {
         val now = clock.now()
-        return ForegroundSpans.foregroundPackage(readEvents(now.minus(lookback), now), now)
-    }
-
-    private suspend fun reconcileDay(day: LocalDate) {
-        val zone = clock.zone()
-        val today = UsageDay.localDate(clock.now(), zone)
-        val start = UsageDay.start(day, zone)
-        val end = if (day == today) clock.now() else UsageDay.nextStart(day, zone)
-        val totals = systemTotals(start, end) ?: return
-        val rows = totals.map { DailyUsageEntity(day.toString(), it.key, it.value) }
-        db.withTransaction {
-            db.usage().deleteDate(day.toString())
-            if (rows.isNotEmpty()) db.usage().upsert(rows)
-        }
+        return ForegroundSpans.foregroundPackage(readEvents(now.minus(lookback), now).orEmpty(), now)
     }
 
     /**
-     * Daily buckets come from the system's saved UsageStats. totalTimeInForeground is the
-     * focused time only: visible-but-unfocused time and foreground-service time are not added.
-     * System packages are dropped. queryAndAggregateUsageStats chooses its own interval and can
-     * include adjacent days, so daily buckets are requested and kept only for the local day.
-     * null means the platform query failed; the caller then keeps the last saved result.
+     * Focused time is rebuilt from the system's usage event log, the same approach used by
+     * ScreenTrack and other event-based counters. Daily UsageStats buckets are not used:
+     * on ColorOS those buckets are not aligned to local midnight and omit the open session.
+     * Spans are clamped to the requested day, screen-off ends them, and system packages are dropped.
      */
-    private fun systemTotals(start: Instant, end: Instant): Map<String, Long>? {
-        if (!start.isBefore(end)) return emptyMap()
-        if (!Permissions.usageGranted(context)) return null
-        val begin = start.toEpochMilli()
-        val finish = end.toEpochMilli()
-        val stats = try {
-            usageStats().queryUsageStats(UsageStatsManager.INTERVAL_DAILY, begin, finish)
-        } catch (_: SecurityException) {
-            return null
-        } catch (_: RuntimeException) {
-            return null
-        } ?: return null
-        val buckets = stats.map { usage ->
-            DailyUsageBucket(usage.packageName, usage.firstTimeStamp, usage.totalTimeInForeground)
+    private fun focusedInRange(
+        events: List<ForegroundEvent>,
+        start: Instant,
+        end: Instant,
+        flags: Map<String, Int>,
+    ): Map<String, Long> {
+        return FocusedUsage.totals(focusedSpans(events, start, end, flags))
+    }
+
+    private fun focusedSpans(
+        events: List<ForegroundEvent>,
+        start: Instant,
+        end: Instant,
+        flags: Map<String, Int>,
+    ): List<ForegroundSpan> {
+        return ForegroundSpans.collect(events, start, end).filter { span ->
+            UsageVisibility.includePackage(flags[span.packageName])
         }
-        val flags = applicationFlags()
-        return UsageDay.totalsForDate(buckets, UsageDay.localDate(start, clock.zone()), clock.zone())
-            .filter { (packageName, millis) ->
-                millis > 0L && UsageVisibility.includePackage(flags[packageName])
-            }
     }
 
     private fun applicationFlags(): Map<String, Int> {
@@ -426,13 +419,13 @@ class UsageRepository(
         }
     }
 
-    private fun readEvents(start: Instant, end: Instant): List<ForegroundEvent> {
+    private fun readEvents(start: Instant, end: Instant): List<ForegroundEvent>? {
         if (!start.isBefore(end) || !Permissions.usageGranted(context)) return emptyList()
         val parsed = mutableListOf<ForegroundEvent>()
         var cursor = start
         while (cursor.isBefore(end)) {
             val sliceEnd = minOf(cursor.plus(eventSlice), end)
-            parsed += readEventSlice(cursor, sliceEnd)
+            parsed += readEventSlice(cursor, sliceEnd) ?: return null
             cursor = sliceEnd
         }
         return parsed.distinctBy { event ->
@@ -440,12 +433,12 @@ class UsageRepository(
         }
     }
 
-    private fun readEventSlice(start: Instant, end: Instant): List<ForegroundEvent> {
+    private fun readEventSlice(start: Instant, end: Instant): List<ForegroundEvent>? {
         val events = try {
             usageStats().queryEvents(start.toEpochMilli(), end.toEpochMilli())
         } catch (_: SecurityException) {
-            return emptyList()
-        } ?: return emptyList()
+            return null
+        } ?: return null
         val raw = UsageEvents.Event()
         val parsed = mutableListOf<ForegroundEvent>()
         while (events.getNextEvent(raw)) {
