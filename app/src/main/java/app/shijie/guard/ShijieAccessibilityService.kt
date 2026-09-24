@@ -6,7 +6,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
@@ -15,12 +14,10 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
-import app.shijie.MainActivity
 import app.shijie.R
 import app.shijie.ShijieApp
 import app.shijie.domain.BlockReason
 import app.shijie.domain.EmergencyRelease
-import app.shijie.system.SettingsNavigator
 
 class ShijieAccessibilityService : AccessibilityService(), GuardHost {
     private val handler = Handler(Looper.getMainLooper())
@@ -42,6 +39,7 @@ class ShijieAccessibilityService : AccessibilityService(), GuardHost {
         engine = (application as ShijieApp).graph.engine
         overlay = OverlayController(this, engine)
         engine.attach(this)
+        (application as ShijieApp).graph.guardConnected.value = true
         val filter = android.content.IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
@@ -77,6 +75,7 @@ class ShijieAccessibilityService : AccessibilityService(), GuardHost {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         if (::engine.isInitialized) engine.detach(this)
+        (application as? ShijieApp)?.graph?.guardConnected?.value = false
         if (::overlay.isInitialized) overlay.hide()
         try {
             unregisterReceiver(screenReceiver)
@@ -108,6 +107,7 @@ class ShijieAccessibilityService : AccessibilityService(), GuardHost {
     override fun cancelSchedule() {
         enforcement?.let { handler.removeCallbacks(it) }
         enforcement = null
+        EnforcementScheduler.cancel(this)
     }
 
     override fun screenInteractive(): Boolean {
@@ -147,6 +147,13 @@ class OverlayController(
                 android.graphics.PixelFormat.TRANSLUCENT,
             ).apply {
                 softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+                    blurBehindRadius = 80
+                }
+            }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                root?.setBackgroundColor(0x66000000)
             }
             try {
                 windowManager.addView(root, params)
@@ -174,19 +181,6 @@ class OverlayController(
 
     private fun wire(view: View) {
         view.findViewById<Button>(R.id.overlay_dismiss).setOnClickListener { engine.dismiss() }
-        view.findViewById<Button>(R.id.overlay_open_app).setOnClickListener {
-            val intent = Intent(service, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            try {
-                service.startActivity(intent)
-            } catch (_: Exception) {
-                Toast.makeText(service, "请从桌面打开时界", Toast.LENGTH_SHORT).show()
-            }
-        }
-        view.findViewById<Button>(R.id.overlay_open_settings).setOnClickListener {
-            if (!SettingsNavigator.openSettingsRoot(service)) {
-                service.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            }
-        }
         view.findViewById<Button>(R.id.overlay_release).setOnClickListener {
             val current = model ?: return@setOnClickListener
             val reason = view.findViewById<EditText>(R.id.overlay_reason_input).text?.toString().orEmpty()

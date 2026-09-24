@@ -16,6 +16,10 @@ import app.shijie.domain.TransitionPlanner
 import app.shijie.domain.UsageDay
 import app.shijie.domain.WorkdayOverride
 import app.shijie.domain.WorkdayStatus
+import app.shijie.domain.GroupLock
+import app.shijie.domain.ChartColumn
+import app.shijie.domain.ChartSlice
+import app.shijie.domain.UsageCategories
 import app.shijie.domain.formatDuration
 import app.shijie.system.Permissions
 import java.time.DayOfWeek
@@ -69,6 +73,7 @@ data class GroupToday(
 
 data class TodayUi(
     val accessibility: Boolean,
+    val guardConnected: Boolean,
     val usageAccess: Boolean,
     val notifications: Boolean,
     val totalLabel: String,
@@ -80,7 +85,8 @@ data class TodayUi(
 
 data class StatsUi(
     val range: StatsRange = StatsRange.TODAY,
-    val bars: List<Pair<String, Long>> = emptyList(),
+    val columns: List<ChartColumn> = emptyList(),
+    val legend: List<ChartSlice> = emptyList(),
     val ranking: List<RankedApp> = emptyList(),
 )
 
@@ -120,6 +126,7 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
 
     fun refresh() {
         viewModelScope.launch {
+            app.shijie.system.HealthNotifier.sync(graph.app)
             loadToday()
             loadStats()
             refreshLock()
@@ -189,14 +196,24 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
             val error = withContext(Dispatchers.IO) {
                 val minutes = draft.quotaMinutes.toLongOrNull()
                 when {
-                    graph.meta.isLocked(graph.clock.now()) -> "上锁期间不能修改规则"
                     draft.name.isBlank() -> "请填写分组名称"
                     minutes == null || minutes < 0L -> "请填写每日额度（分钟）"
                     draft.useRange && (draft.startDate == null || draft.endDate == null) -> "请选择起止日期"
                     draft.useRange && draft.startDate!! > draft.endDate!! -> "结束日期不能早于开始日期"
                     draft.windows.any { !it.isValid() } -> "有一条禁用时段无效"
                     else -> try {
-                        graph.groups.save(draft.toGroup(minutes), draft.apps)
+                        val proposed = draft.toGroup(minutes)
+                        if (graph.meta.isLocked(graph.clock.now()) && draft.id != 0L) {
+                            val existing = graph.groups.get(draft.id)
+                                ?: return@withContext "分组已不存在"
+                            GroupLock.rejection(
+                                existing.group,
+                                proposed,
+                                existing.packages.toSet(),
+                                draft.apps,
+                            )?.let { return@withContext it }
+                        }
+                        graph.groups.save(proposed, draft.apps)
                         null
                     } catch (error: IllegalArgumentException) {
                         error.message ?: "无法保存"
@@ -258,7 +275,7 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
         val now = graph.clock.now()
         _lockLabel.value = if (until != null && now.isBefore(until)) {
             val zoned = until.atZone(graph.clock.zone())
-            "已上锁到 ${zoned.format(DateTimeFormatter.ofPattern("M月d日 HH:mm"))}。到点之前不能修改、关闭或删除规则，时界里也没有解除按钮。"
+            "已上锁到 ${zoned.format(DateTimeFormatter.ofPattern("M月d日 HH:mm"))}。到点之前不能修改已有分组的时间限制和使用时长，也不能关闭、删除或调整应用名单。名称和图标可以改，也可以新建分组。时界里没有解除按钮。"
         } else {
             null
         }
@@ -303,6 +320,7 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
             }
             TodayUi(
                 accessibility = Permissions.accessibilityEnabled(graph.app),
+                guardConnected = graph.guardConnected.value,
                 usageAccess = Permissions.usageGranted(graph.app),
                 notifications = Permissions.notificationsEnabled(graph.app),
                 totalLabel = formatDuration(total),
@@ -321,27 +339,55 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
             val zone = graph.clock.zone()
             val today = UsageDay.localDate(now, zone)
             val open = graph.engine.currentSession()
+            val stored = graph.groups.snapshot()
+            val membership = HashMap<String, MutableList<Pair<String, Int>>>()
+            stored.forEach { group ->
+                group.packages.forEach { pkg ->
+                    val list = membership.getOrPut(pkg) { mutableListOf() }
+                    if (list.none { it.first == group.group.name }) {
+                        list += group.group.name to group.group.colorArgb
+                    }
+                }
+            }
+            val order = stored.map { it.group.name to it.group.colorArgb }
             when (range) {
                 StatsRange.TODAY -> {
-                    val hours = graph.usage.hourlyToday(open)
+                    val hours = graph.usage.hourlyByPackage(open)
+                    val labels = List(hours.size) { hour -> "%02d".format(hour) }
+                    val (columns, legend) = UsageCategories.stack(labels, hours, membership, order)
                     StatsUi(
                         range = range,
-                        bars = hours.mapIndexed { hour, value -> "%02d".format(hour) to value },
+                        columns = columns,
+                        legend = legend,
                         ranking = graph.usage.ranking(today, today, open),
                     )
                 }
-                StatsRange.WEEK -> statsFor(today.minusDays(6), today, open)
-                StatsRange.MONTH -> statsFor(today.minusDays(29), today, open)
+                StatsRange.WEEK -> statsFor(today.minusDays(6), today, open, membership, order)
+                StatsRange.MONTH -> statsFor(today.minusDays(29), today, open, membership, order)
             }
         }
         _stats.value = ui
     }
 
-    private suspend fun statsFor(from: LocalDate, to: LocalDate, open: app.shijie.domain.OpenSession?): StatsUi {
-        val totals = graph.usage.dailyTotals(from, to, open)
+    private suspend fun statsFor(
+        from: LocalDate,
+        to: LocalDate,
+        open: app.shijie.domain.OpenSession?,
+        membership: Map<String, List<Pair<String, Int>>>,
+        order: List<Pair<String, Int>>,
+    ): StatsUi {
+        val days = graph.usage.dailyByPackage(from, to, open)
+        val labels = mutableListOf<String>()
+        var day = from
+        while (!day.isAfter(to)) {
+            labels += "${day.monthValue}/${day.dayOfMonth}"
+            day = day.plusDays(1)
+        }
+        val (columns, legend) = UsageCategories.stack(labels, days, membership, order)
         return StatsUi(
             range = range,
-            bars = totals.map { (day, value) -> "${day.monthValue}/${day.dayOfMonth}" to value },
+            columns = columns,
+            legend = legend,
             ranking = graph.usage.ranking(from, to, open),
         )
     }

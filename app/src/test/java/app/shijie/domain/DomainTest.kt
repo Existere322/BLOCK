@@ -213,6 +213,16 @@ class RuleEvaluatorTest {
     }
 
     @Test
+    fun legalWorkdayOvernightContinuesIntoWeekendMorning() {
+        // Friday night → Saturday morning must stay blocked when policy is legal workday.
+        val group = sample(policy = DayPolicy.LEGAL_WORKDAY, windows = listOf(BlockWindow(23 * 60, 11 * 60)))
+        assertEquals(BlockReason.BLOCK_WINDOW, reasonAt(group, "2026-03-06T23:30:00")) // Friday
+        assertEquals(BlockReason.BLOCK_WINDOW, reasonAt(group, "2026-03-07T10:30:00")) // Saturday morning
+        assertTrue(evaluator.evaluate("app.game", instant("2026-03-07T12:00:00"), usage(group)) is BlockDecision.Allow)
+        assertTrue(evaluator.evaluate("app.game", instant("2026-03-07T23:30:00"), usage(group)) is BlockDecision.Allow)
+    }
+
+    @Test
     fun temporaryReleaseBypassesWindowAndQuotaUntilExpiryOrReboot() {
         val group = sample(windows = listOf(BlockWindow(0, 24 * 60)), quotaMinutes = 1)
         val now = instant("2026-03-04T10:00:00")
@@ -360,6 +370,133 @@ class UsageAndQuotaTest {
         assertEquals(20 * 60_000L, Duration.between(spans[0].start, spans[0].end).toMillis())
         assertEquals("app.video", spans[1].packageName)
         assertEquals(end, spans[1].end)
+    }
+
+    @Test
+    fun screenOffClosesTheOpenSession() {
+        val start = instant("2026-03-04T00:00:00")
+        val end = instant("2026-03-04T02:00:00")
+        val events = listOf(
+            ForegroundEvent("app.game", instant("2026-03-03T23:30:00"), ForegroundEventKind.RESUME),
+            ForegroundEvent("", instant("2026-03-04T00:10:00"), ForegroundEventKind.SCREEN_OFF),
+        )
+        val spans = ForegroundSpans.collect(events, start, end)
+        assertEquals(1, spans.size)
+        assertEquals(10 * 60_000L, Duration.between(spans[0].start, spans[0].end).toMillis())
+    }
+
+    @Test
+    fun missingScreenEventsKeepCountingUntilPause() {
+        val start = instant("2026-03-04T00:00:00")
+        val end = instant("2026-03-04T01:00:00")
+        val events = listOf(
+            ForegroundEvent("app.game", instant("2026-03-03T23:40:00"), ForegroundEventKind.RESUME),
+            ForegroundEvent("app.game", instant("2026-03-04T00:20:00"), ForegroundEventKind.PAUSE),
+        )
+        val spans = ForegroundSpans.collect(events, start, end)
+        assertEquals(1, spans.size)
+        assertEquals(20 * 60_000L, Duration.between(spans[0].start, spans[0].end).toMillis())
+    }
+
+    @Test
+    fun stoppingTheLeftActivityDoesNotCutTheOneThatReplacedIt() {
+        val start = instant("2026-03-04T10:00:00")
+        val end = instant("2026-03-04T11:00:00")
+        val events = listOf(
+            ForegroundEvent("app.game", instant("2026-03-04T10:00:00"), ForegroundEventKind.RESUME, 1),
+            ForegroundEvent("app.game", instant("2026-03-04T10:01:00"), ForegroundEventKind.PAUSE, 1),
+            ForegroundEvent("app.game", instant("2026-03-04T10:01:00"), ForegroundEventKind.RESUME, 2),
+            ForegroundEvent("app.game", instant("2026-03-04T10:02:00"), ForegroundEventKind.STOP, 1),
+            ForegroundEvent("app.game", instant("2026-03-04T10:30:00"), ForegroundEventKind.PAUSE, 2),
+        )
+        val spans = ForegroundSpans.collect(events, start, end)
+        assertEquals(30 * 60_000L, spans.sumOf { Duration.between(it.start, it.end).toMillis() })
+        assertEquals(
+            "app.game",
+            ForegroundSpans.foregroundPackage(events, instant("2026-03-04T10:03:00")),
+        )
+    }
+
+    @Test
+    fun overlappingResumedActivitiesCountOnce() {
+        val start = instant("2026-03-04T10:00:00")
+        val end = instant("2026-03-04T11:00:00")
+        val events = listOf(
+            ForegroundEvent("app.game", instant("2026-03-04T10:00:00"), ForegroundEventKind.RESUME, 1),
+            ForegroundEvent("app.game", instant("2026-03-04T10:10:00"), ForegroundEventKind.RESUME, 2),
+            ForegroundEvent("app.game", instant("2026-03-04T10:20:00"), ForegroundEventKind.PAUSE, 1),
+            ForegroundEvent("app.game", instant("2026-03-04T10:30:00"), ForegroundEventKind.PAUSE, 2),
+        )
+        val spans = ForegroundSpans.collect(events, start, end)
+        assertEquals(30 * 60_000L, spans.sumOf { Duration.between(it.start, it.end).toMillis() })
+    }
+
+    @Test
+    fun stopAfterASwitchDoesNotCutTheCurrentScreen() {
+        val start = instant("2026-03-04T10:00:00")
+        val end = instant("2026-03-04T11:00:00")
+        val events = listOf(
+            ForegroundEvent("app.game", instant("2026-03-04T10:00:00"), ForegroundEventKind.RESUME),
+            ForegroundEvent("app.game", instant("2026-03-04T10:20:00"), ForegroundEventKind.RESUME),
+            ForegroundEvent("app.game", instant("2026-03-04T10:20:01"), ForegroundEventKind.PAUSE),
+            ForegroundEvent("app.game", instant("2026-03-04T10:20:02"), ForegroundEventKind.STOP),
+            ForegroundEvent("app.game", instant("2026-03-04T10:50:00"), ForegroundEventKind.PAUSE),
+        )
+        val spans = ForegroundSpans.collect(events, start, end)
+        assertEquals(50 * 60_000L, spans.sumOf { Duration.between(it.start, it.end).toMillis() })
+        assertEquals("app.game", ForegroundSpans.foregroundPackage(events, instant("2026-03-04T10:21:00")))
+    }
+
+    @Test
+    fun resumeCountsEvenWhenTheScreenFlagWasStuckOff() {
+        val start = instant("2026-03-04T10:00:00")
+        val end = instant("2026-03-04T11:00:00")
+        val events = listOf(
+            ForegroundEvent("", instant("2026-03-04T09:00:00"), ForegroundEventKind.SCREEN_OFF),
+            ForegroundEvent("app.game", instant("2026-03-04T10:00:00"), ForegroundEventKind.RESUME),
+            ForegroundEvent("app.game", instant("2026-03-04T10:40:00"), ForegroundEventKind.PAUSE),
+        )
+        val spans = ForegroundSpans.collect(events, start, end)
+        assertEquals(40 * 60_000L, spans.sumOf { Duration.between(it.start, it.end).toMillis() })
+    }
+
+    @Test
+    fun stopAloneDoesNotEndTheOpenSession() {
+        val start = instant("2026-03-04T10:00:00")
+        val end = instant("2026-03-04T11:00:00")
+        val events = listOf(
+            ForegroundEvent("app.game", instant("2026-03-04T10:00:00"), ForegroundEventKind.RESUME, 1),
+            ForegroundEvent("app.game", instant("2026-03-04T10:15:00"), ForegroundEventKind.STOP, 1),
+        )
+        val spans = ForegroundSpans.collect(events, start, end)
+        assertEquals(60 * 60_000L, spans.sumOf { Duration.between(it.start, it.end).toMillis() })
+        assertEquals("app.game", ForegroundSpans.foregroundPackage(events, instant("2026-03-04T10:16:00")))
+    }
+
+    @Test
+    fun screenOnResumesCountingWhenTheActivityStayedResumed() {
+        val start = instant("2026-03-04T00:00:00")
+        val end = instant("2026-03-04T02:00:00")
+        val events = listOf(
+            ForegroundEvent("app.game", instant("2026-03-03T23:30:00"), ForegroundEventKind.RESUME),
+            ForegroundEvent("", instant("2026-03-04T00:10:00"), ForegroundEventKind.SCREEN_OFF),
+            ForegroundEvent("", instant("2026-03-04T00:40:00"), ForegroundEventKind.SCREEN_ON),
+            ForegroundEvent("app.game", instant("2026-03-04T01:00:00"), ForegroundEventKind.PAUSE),
+        )
+        val spans = ForegroundSpans.collect(events, start, end)
+        assertEquals(30 * 60_000L, spans.sumOf { Duration.between(it.start, it.end).toMillis() })
+    }
+
+    @Test
+    fun shutdownClosesForegroundTime() {
+        val start = instant("2026-03-04T10:00:00")
+        val end = instant("2026-03-04T11:00:00")
+        val events = listOf(
+            ForegroundEvent("app.game", instant("2026-03-04T10:00:00"), ForegroundEventKind.RESUME),
+            ForegroundEvent("", instant("2026-03-04T10:10:00"), ForegroundEventKind.SHUTDOWN),
+        )
+        val spans = ForegroundSpans.collect(events, start, end)
+        assertEquals(10 * 60_000L, spans.sumOf { Duration.between(it.start, it.end).toMillis() })
     }
 
     @Test

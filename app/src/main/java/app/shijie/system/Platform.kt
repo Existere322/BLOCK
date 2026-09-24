@@ -129,12 +129,17 @@ object ColorOsGuide {
         ),
         GuideStep(
             "自启动",
-            "设置 → 应用 → 自启动管理 → 打开时界。系统回收权限后，重启才能自动恢复保护。",
+            "设置 → 应用 → 自启动管理 → 打开时界。只要无障碍权限仍保持开启，开机和应用更新后都会自动恢复保护。",
             GuideAction.AUTOSTART,
         ),
         GuideStep(
             "最近任务锁定",
             "打开最近任务，找到时界卡片，向下滑或点菜单后选择锁定。清理最近任务时不要划掉它。",
+            GuideAction.APP_DETAILS,
+        ),
+        GuideStep(
+            "精确闹钟（可选）",
+            "设置 → 应用 → 特殊应用权限 → 闹钟和提醒 → 时界 → 允许。用于额度用尽、进入禁用时段时准时再次判定。",
             GuideAction.APP_DETAILS,
         ),
     )
@@ -232,8 +237,8 @@ object HealthNotifier {
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("时界的保护已暂停")
-            .setContentText("请重新打开${missing.joinToString("、")}")
+            .setContentTitle("系统关闭了时界的保护权限")
+            .setContentText("点击恢复${missing.joinToString("、")}；权限保持开启时无需手动启动时界")
             .setContentIntent(pending)
             .setAutoCancel(true)
             .setSilent(true)

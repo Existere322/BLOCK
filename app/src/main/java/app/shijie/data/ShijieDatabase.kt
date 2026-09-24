@@ -15,6 +15,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import android.content.Context
 import kotlinx.coroutines.flow.Flow
 
@@ -42,10 +44,11 @@ data class GroupEntity(
             onDelete = ForeignKey.CASCADE,
         ),
     ],
+    primaryKeys = ["packageName", "groupId"],
     indices = [Index("groupId")],
 )
 data class GroupAppEntity(
-    @PrimaryKey val packageName: String,
+    val packageName: String,
     val groupId: Long,
 )
 
@@ -145,7 +148,7 @@ interface GroupDao {
     suspend fun delete(id: Long)
 
     @Query("SELECT groupId FROM group_apps WHERE packageName = :packageName")
-    suspend fun groupIdOf(packageName: String): Long?
+    suspend fun groupIdsOf(packageName: String): List<Long>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertApp(app: GroupAppEntity)
@@ -236,7 +239,7 @@ interface MetaDao {
         OverrideEntity::class,
         MetaEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class ShijieDatabase : RoomDatabase() {
@@ -249,13 +252,29 @@ abstract class ShijieDatabase : RoomDatabase() {
     companion object {
         @Volatile private var instance: ShijieDatabase? = null
 
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `group_apps_new` (`packageName` TEXT NOT NULL, `groupId` INTEGER NOT NULL, PRIMARY KEY(`packageName`, `groupId`), FOREIGN KEY(`groupId`) REFERENCES `restriction_groups`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+                )
+                db.execSQL(
+                    "INSERT INTO `group_apps_new` (`packageName`, `groupId`) SELECT `packageName`, `groupId` FROM `group_apps`",
+                )
+                db.execSQL("DROP TABLE `group_apps`")
+                db.execSQL("ALTER TABLE `group_apps_new` RENAME TO `group_apps`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_group_apps_groupId` ON `group_apps` (`groupId`)",
+                )
+            }
+        }
+
         fun get(context: Context): ShijieDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     ShijieDatabase::class.java,
                     "shijie.db",
-                ).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
             }
         }
     }

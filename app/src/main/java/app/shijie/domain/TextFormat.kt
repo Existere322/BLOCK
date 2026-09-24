@@ -30,6 +30,20 @@ fun formatDuration(millis: Long): String {
     }
 }
 
+/** Stats totals stay at minute precision. Seconds are dropped, not rounded up. */
+fun formatDurationMinutes(millis: Long): String {
+    val safe = millis.coerceAtLeast(0L)
+    if (safe in 1 until 60_000) return "不到1分"
+    val totalMinutes = safe / 60_000
+    val hours = totalMinutes / 60
+    val minutes = totalMinutes % 60
+    return when {
+        hours > 0 && minutes > 0 -> "${hours}小时${minutes}分"
+        hours > 0 -> "${hours}小时"
+        else -> "${minutes}分"
+    }
+}
+
 fun iconGlyph(iconKey: String): String = when (iconKey) {
     "book" -> "读"
     "work" -> "事"
@@ -42,4 +56,21 @@ fun iconGlyph(iconKey: String): String = when (iconKey) {
     else -> "组"
 }
 
-val GROUP_ICON_KEYS = listOf("book", "work", "game", "moon", "music", "run", "coffee", "star")
+val GROUP_ICON_KEYS = listOf(
+    "book",
+    "work",
+    "game",
+    "moon",
+    "music",
+    "run",
+    "coffee",
+    "star",
+    "cart",
+    "chat",
+    "video",
+    "camera",
+    "headphones",
+    "phone",
+    "palette",
+    "news",
+)

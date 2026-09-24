@@ -6,7 +6,9 @@ import android.content.Intent
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -20,7 +22,7 @@ import kotlinx.coroutines.launch
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
+        if (intent?.action !in setOf(Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED)) return
         val pending = goAsync()
         val app = context.applicationContext as ShijieApp
         app.graph.scope.launch {
@@ -36,7 +38,8 @@ class BootReceiver : BroadcastReceiver() {
 
 object Maintenance {
     fun ensure(context: Context) {
-        val request = PeriodicWorkRequestBuilder<MaintenanceWorker>(24, TimeUnit.HOURS)
+        val manager = WorkManager.getInstance(context)
+        val daily = PeriodicWorkRequestBuilder<MaintenanceWorker>(24, TimeUnit.HOURS)
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
@@ -44,11 +47,43 @@ object Maintenance {
             )
             .setInitialDelay(12, TimeUnit.HOURS)
             .build()
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+        manager.enqueueUniquePeriodicWork(
             "shijie-daily",
-            ExistingPeriodicWorkPolicy.KEEP,
-            request,
+            ExistingPeriodicWorkPolicy.UPDATE,
+            daily,
         )
+
+        val health = PeriodicWorkRequestBuilder<HealthWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
+                    .build(),
+            )
+            .build()
+        manager.enqueueUniquePeriodicWork(
+            "shijie-health",
+            ExistingPeriodicWorkPolicy.UPDATE,
+            health,
+        )
+        manager.enqueueUniqueWork(
+            "shijie-health-now",
+            ExistingWorkPolicy.REPLACE,
+            OneTimeWorkRequestBuilder<HealthWorker>().build(),
+        )
+    }
+}
+
+class HealthWorker(
+    context: Context,
+    params: WorkerParameters,
+) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        HealthNotifier.sync(applicationContext)
+        val graph = (applicationContext as? ShijieApp)?.graph
+        if (graph != null && graph.guardConnected.value) {
+            graph.engine.recheckForeground()
+        }
+        return Result.success()
     }
 }
 

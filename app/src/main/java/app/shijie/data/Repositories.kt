@@ -13,6 +13,7 @@ import app.shijie.domain.ForegroundEvent
 import app.shijie.domain.ForegroundEventKind
 import app.shijie.domain.ForegroundSpan
 import app.shijie.domain.ForegroundSpans
+import app.shijie.domain.HourAlignment
 import app.shijie.domain.OpenSession
 import app.shijie.domain.QuotaAccounting
 import app.shijie.domain.RestrictionGroup
@@ -45,7 +46,7 @@ data class StoredGroup(
 data class LaunchableRow(
     val packageName: String,
     val label: String,
-    val otherGroup: String?,
+    val otherGroups: List<String>,
 )
 
 data class RankedApp(
@@ -66,9 +67,8 @@ class GroupRepository(
 
     suspend fun get(id: Long): StoredGroup? = db.groups().get(id)?.toStored()
 
-    suspend fun findByPackage(packageName: String): StoredGroup? {
-        val id = db.groups().groupIdOf(packageName) ?: return null
-        return get(id)
+    suspend fun findByPackage(packageName: String): List<StoredGroup> {
+        return db.groups().groupIdsOf(packageName).mapNotNull { get(it) }
     }
 
     suspend fun save(group: RestrictionGroup, packages: Set<String>): Long = withContext(Dispatchers.IO) {
@@ -116,10 +116,11 @@ class GroupRepository(
 
     suspend fun launchable(currentGroupId: Long): List<LaunchableRow> = withContext(Dispatchers.IO) {
         val stored = db.groups().all().map { it.toStored() }
-        val owner = HashMap<String, String>()
+        val owners = HashMap<String, MutableList<String>>()
         stored.forEach { item ->
-            if (item.group.id != currentGroupId) {
-                item.packages.forEach { owner[it] = item.group.name }
+            if (item.group.id == currentGroupId) return@forEach
+            item.packages.forEach { pkg ->
+                owners.getOrPut(pkg) { mutableListOf() }.add(item.group.name)
             }
         }
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -130,7 +131,7 @@ class GroupRepository(
                 LaunchableRow(
                     packageName = packageName,
                     label = resolve.loadLabel(context.packageManager)?.toString().orEmpty().ifBlank { packageName },
-                    otherGroup = owner[packageName],
+                    otherGroups = owners[packageName].orEmpty(),
                 )
             }
             .distinctBy { it.packageName }
@@ -240,7 +241,23 @@ class UsageRepository(
     private val clock: AppClock,
 ) {
     private val mutex = Mutex()
-    private val lastUsed = HashMap<String, Long>()
+    /** Sessions often start long before the day being counted. Events are kept for a few days. */
+    private val lookback = Duration.ofDays(3)
+    /** Some phones only return the newest slice of a long event query, which drops the rest of the day. */
+    private val eventSlice = Duration.ofHours(1)
+
+    /**
+     * CONTINUE_PREVIOUS_DAY is a hidden UsageEvents type (value 4). The platform treats it as
+     * ACTIVITY_RESUMED when a package was still in the foreground across a stats rollover.
+     */
+    private val continuePreviousDay = 4
+    /** Hidden on the SDK we compile against; UsageEvents.Event.ACTIVITY_DESTROYED is 24. */
+    private val activityDestroyed = 24
+    private val instanceIdMethod: java.lang.reflect.Method? = try {
+        UsageEvents.Event::class.java.getMethod("getInstanceId")
+    } catch (_: Throwable) {
+        null
+    }
 
     suspend fun reconcile(from: LocalDate, to: LocalDate) = mutex.withLock {
         if (!Permissions.usageGranted(context)) return
@@ -258,32 +275,35 @@ class UsageRepository(
         val zone = clock.zone()
         val today = UsageDay.localDate(now, zone)
         reconcile(today, today)
-        val rows = db.usage().forDate(today.toString())
-        var sum = 0L
-        val seen = HashSet<String>()
-        for (row in rows) {
-            seen += row.packageName
-            sum += row.foregroundMillis + tail(row.packageName, open, now)
+        return db.usage().forDate(today.toString()).sumOf { it.foregroundMillis }
+    }
+
+    suspend fun dailyByPackage(from: LocalDate, to: LocalDate, open: OpenSession?): List<Map<String, Long>> {
+        reconcile(from, to)
+        val rows = db.usage().between(from.toString(), to.toString())
+        val grouped = rows.groupBy { it.date }
+        val result = mutableListOf<Map<String, Long>>()
+        var day = from
+        while (!day.isAfter(to)) {
+            val map = HashMap<String, Long>()
+            grouped[day.toString()].orEmpty().forEach { row ->
+                map[row.packageName] = (map[row.packageName] ?: 0L) + row.foregroundMillis
+            }
+            result += map
+            day = day.plusDays(1)
         }
-        if (open != null && open.packageName !in seen) {
-            sum += Duration.between(open.since, now).toMillis().coerceAtLeast(0L)
-        }
-        return sum
+        return result
     }
 
     suspend fun dailyTotals(from: LocalDate, to: LocalDate, open: OpenSession?): List<Pair<LocalDate, Long>> {
         reconcile(from, to)
         val rows = db.usage().between(from.toString(), to.toString())
-        val now = clock.now()
-        val today = UsageDay.localDate(now, clock.zone())
         val grouped = rows.groupBy { it.date }
         val result = mutableListOf<Pair<LocalDate, Long>>()
         var day = from
         while (!day.isAfter(to)) {
             val items = grouped[day.toString()].orEmpty()
-            var sum = items.sumOf { it.foregroundMillis }
-            if (day == today && open != null) sum += tail(open.packageName, open, now)
-            result += day to sum
+            result += day to items.sumOf { it.foregroundMillis }
             day = day.plusDays(1)
         }
         return result
@@ -294,12 +314,6 @@ class UsageRepository(
         val rows = db.usage().between(from.toString(), to.toString())
         val totals = HashMap<String, Long>()
         rows.forEach { totals[it.packageName] = (totals[it.packageName] ?: 0L) + it.foregroundMillis }
-        val now = clock.now()
-        val today = UsageDay.localDate(now, clock.zone())
-        if (open != null && !today.isBefore(from) && !today.isAfter(to)) {
-            val pkg = open.packageName
-            totals[pkg] = (totals[pkg] ?: 0L) + tail(pkg, open, now)
-        }
         return totals.entries
             .filter { it.value > 0L }
             .sortedByDescending { it.value }
@@ -307,16 +321,22 @@ class UsageRepository(
             .map { RankedApp(it.key, label(it.key), it.value) }
     }
 
-    suspend fun hourlyToday(open: OpenSession?): List<Long> {
+    suspend fun hourlyByPackage(open: OpenSession?): List<Map<String, Long>> {
         val now = clock.now()
         val zone = clock.zone()
         val day = UsageDay.localDate(now, zone)
         val start = UsageDay.start(day, zone)
-        val events = readEvents(start, now).toMutableList()
-        if (open != null) events += ForegroundEvent(open.packageName, open.since, ForegroundEventKind.RESUME)
-        val buckets = LongArray(24)
-        ForegroundSpans.collect(events, start, now).forEach { span -> addHours(span, zone, buckets) }
-        return buckets.toList()
+        val totals = systemTotals(start, now).orEmpty()
+        val events = readEvents(start, now)
+        val buckets = List(24) { HashMap<String, Long>() }
+        ForegroundSpans.collect(events, start, now).forEach { span -> addPackageHours(span, zone, buckets) }
+        return HourAlignment.scale(buckets, totals, now.atZone(zone).hour).map { hour ->
+            hour.filterKeys { it in totals }
+        }
+    }
+
+    suspend fun hourlyToday(open: OpenSession?): List<Long> {
+        return hourlyByPackage(open).map { hour -> hour.values.sum() }
     }
 
     suspend fun systemForegroundToday(packages: Set<String>, open: OpenSession? = null): Long {
@@ -327,8 +347,7 @@ class UsageRepository(
         val stored = db.usage().forDate(today.toString())
             .filter { it.packageName in packages }
             .sumOf { it.foregroundMillis }
-        val live = if (open != null && open.packageName in packages) tail(open.packageName, open, now) else 0L
-        return stored + live
+        return stored
     }
 
     @Suppress("UNUSED_PARAMETER")
@@ -338,50 +357,65 @@ class UsageRepository(
         releases: List<TemporaryOverride>,
         open: OpenSession?,
     ): Long {
-        // 额度对照系统屏幕使用时间，包含分组建立之前今天已经用掉的时长。
+        // 额度直接用系统 UsageStats 的前台时长，不再自行累加事件。
         return systemForegroundToday(packages, open)
     }
 
     suspend fun lastResumedPackage(): String? {
         val now = clock.now()
-        val zone = clock.zone()
-        val start = UsageDay.start(UsageDay.localDate(now, zone), zone)
-        var current: String? = null
-        for (event in readEvents(start, now).sortedBy { it.at }) {
-            when (event.kind) {
-                ForegroundEventKind.RESUME -> current = event.packageName
-                ForegroundEventKind.PAUSE -> if (current == event.packageName) current = null
-            }
-        }
-        return current
+        return ForegroundSpans.foregroundPackage(readEvents(now.minus(lookback), now), now)
     }
 
     private suspend fun reconcileDay(day: LocalDate) {
         val zone = clock.zone()
-        val start = UsageDay.start(day, zone).toEpochMilli()
-        val end = UsageDay.nextStart(day, zone).toEpochMilli()
-        val stats = try {
-            usageStats().queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end).orEmpty()
-        } catch (_: SecurityException) {
-            return
-        }
-        val summed = HashMap<String, Long>()
-        for (item in stats) {
-            if (item.totalTimeInForeground <= 0L) continue
-            summed[item.packageName] = (summed[item.packageName] ?: 0L) + item.totalTimeInForeground
-            if (day == UsageDay.localDate(clock.now(), zone)) {
-                lastUsed[item.packageName] = maxOf(lastUsed[item.packageName] ?: 0L, item.lastTimeUsed)
-            }
-        }
-        val rows = summed.map { DailyUsageEntity(day.toString(), it.key, it.value) }
+        val today = UsageDay.localDate(clock.now(), zone)
+        val start = UsageDay.start(day, zone)
+        val end = if (day == today) clock.now() else UsageDay.nextStart(day, zone)
+        val totals = systemTotals(start, end) ?: return
+        val rows = totals.map { DailyUsageEntity(day.toString(), it.key, it.value) }
         db.withTransaction {
             db.usage().deleteDate(day.toString())
             if (rows.isNotEmpty()) db.usage().upsert(rows)
         }
     }
 
+    /**
+     * 使用 Android 官方聚合接口读取系统前台时长。它负责合并查询范围内
+     * 扩展到的日统计桶，避免自行挑选单条记录时丢失同一应用的统计片段。
+     * null 表示查询失败；调用方保留上次结果，不能把失败当成“今天用时为零”。
+     */
+    private fun systemTotals(start: Instant, end: Instant): Map<String, Long>? {
+        if (!start.isBefore(end)) return emptyMap()
+        if (!Permissions.usageGranted(context)) return null
+        val begin = start.toEpochMilli()
+        val finish = end.toEpochMilli()
+        val stats = try {
+            usageStats().queryAndAggregateUsageStats(begin, finish)
+        } catch (_: SecurityException) {
+            return null
+        } catch (_: RuntimeException) {
+            return null
+        }
+        return stats.mapNotNull { (packageName, usage) ->
+            usage.totalTimeInForeground.takeIf { it > 0L }?.let { packageName to it }
+        }.toMap()
+    }
+
     private fun readEvents(start: Instant, end: Instant): List<ForegroundEvent> {
-        if (!Permissions.usageGranted(context)) return emptyList()
+        if (!start.isBefore(end) || !Permissions.usageGranted(context)) return emptyList()
+        val parsed = mutableListOf<ForegroundEvent>()
+        var cursor = start
+        while (cursor.isBefore(end)) {
+            val sliceEnd = minOf(cursor.plus(eventSlice), end)
+            parsed += readEventSlice(cursor, sliceEnd)
+            cursor = sliceEnd
+        }
+        return parsed.distinctBy { event ->
+            listOf(event.packageName, event.at.toEpochMilli(), event.kind, event.instanceKey)
+        }
+    }
+
+    private fun readEventSlice(start: Instant, end: Instant): List<ForegroundEvent> {
         val events = try {
             usageStats().queryEvents(start.toEpochMilli(), end.toEpochMilli())
         } catch (_: SecurityException) {
@@ -389,35 +423,62 @@ class UsageRepository(
         } ?: return emptyList()
         val raw = UsageEvents.Event()
         val parsed = mutableListOf<ForegroundEvent>()
-        while (events.hasNextEvent()) {
-            events.getNextEvent(raw)
-            val kind = when (raw.eventType) {
-                UsageEvents.Event.ACTIVITY_RESUMED -> ForegroundEventKind.RESUME
-                UsageEvents.Event.ACTIVITY_PAUSED,
+        while (events.getNextEvent(raw)) {
+            val eventType = raw.eventType
+            val timeStamp = raw.timeStamp
+            val packageName = raw.packageName.orEmpty()
+            val className = raw.className.orEmpty()
+            val instanceId = reflectedInstanceId(raw)
+            val kind = when (eventType) {
+                UsageEvents.Event.ACTIVITY_RESUMED,
+                continuePreviousDay,
+                -> ForegroundEventKind.RESUME
+                UsageEvents.Event.ACTIVITY_PAUSED -> ForegroundEventKind.PAUSE
                 UsageEvents.Event.ACTIVITY_STOPPED,
-                -> ForegroundEventKind.PAUSE
+                activityDestroyed,
+                -> ForegroundEventKind.STOP
+                UsageEvents.Event.SCREEN_INTERACTIVE -> ForegroundEventKind.SCREEN_ON
+                UsageEvents.Event.SCREEN_NON_INTERACTIVE -> ForegroundEventKind.SCREEN_OFF
+                UsageEvents.Event.DEVICE_SHUTDOWN -> ForegroundEventKind.SHUTDOWN
                 else -> null
             } ?: continue
-            val packageName = raw.packageName ?: continue
-            parsed += ForegroundEvent(packageName, Instant.ofEpochMilli(raw.timeStamp), kind)
+            if (packageName.isEmpty() &&
+                kind != ForegroundEventKind.SCREEN_ON &&
+                kind != ForegroundEventKind.SCREEN_OFF &&
+                kind != ForegroundEventKind.SHUTDOWN
+            ) {
+                continue
+            }
+            val instanceKey = when {
+                instanceId != 0 -> instanceId
+                className.isNotEmpty() -> className.hashCode()
+                else -> 0
+            }
+            parsed += ForegroundEvent(packageName, Instant.ofEpochMilli(timeStamp), kind, instanceKey)
         }
         return parsed
     }
 
-    private fun tail(packageName: String, open: OpenSession?, now: Instant): Long {
-        if (open == null || open.packageName != packageName) return 0L
-        val from = maxOf(lastUsed[packageName] ?: open.since.toEpochMilli(), open.since.toEpochMilli())
-        return (now.toEpochMilli() - from).coerceAtLeast(0L)
+    private fun reflectedInstanceId(event: UsageEvents.Event): Int {
+        val method = instanceIdMethod ?: return 0
+        return try {
+            method.invoke(event) as? Int ?: 0
+        } catch (_: Throwable) {
+            0
+        }
     }
 
-    private fun addHours(span: ForegroundSpan, zone: ZoneId, buckets: LongArray) {
+    private fun addPackageHours(span: ForegroundSpan, zone: ZoneId, buckets: List<MutableMap<String, Long>>) {
         var cursor = span.start
         while (cursor.isBefore(span.end)) {
             val zoned = cursor.atZone(zone)
             val hourEnd = zoned.withMinute(0).withSecond(0).withNano(0).plusHours(1).toInstant()
             val sliceEnd = if (hourEnd.isBefore(span.end)) hourEnd else span.end
             val hour = zoned.hour
-            if (hour in buckets.indices) buckets[hour] += Duration.between(cursor, sliceEnd).toMillis()
+            if (hour in buckets.indices) {
+                val map = buckets[hour]
+                map[span.packageName] = (map[span.packageName] ?: 0L) + Duration.between(cursor, sliceEnd).toMillis()
+            }
             cursor = sliceEnd
         }
     }

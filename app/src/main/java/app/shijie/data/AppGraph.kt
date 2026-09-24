@@ -21,11 +21,13 @@ class AppGraph(val app: Application) {
     val overrides = OverrideRepository(db)
     val meta = MetaStore(db)
     val lastForegroundEvent = MutableStateFlow<Long?>(null)
+    val guardConnected = MutableStateFlow(false)
     val engine = GuardEngine(this)
 
     fun start() {
         HealthNotifier.ensureChannel(app)
         Maintenance.ensure(app)
+        HealthNotifier.sync(app)
         scope.launch {
             val stored = meta.get(MetaStore.LAST_EVENT)?.toLongOrNull()
             if (stored != null) lastForegroundEvent.value = stored

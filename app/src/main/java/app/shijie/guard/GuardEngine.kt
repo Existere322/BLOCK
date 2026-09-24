@@ -9,6 +9,7 @@ import app.shijie.domain.GroupSchedule
 import app.shijie.domain.GroupUsage
 import app.shijie.domain.OpenSession
 import app.shijie.domain.RestrictionGroup
+import app.shijie.domain.RestrictionUnion
 import app.shijie.domain.RuleEvaluator
 import app.shijie.domain.TemporaryOverride
 import app.shijie.domain.TransitionPlanner
@@ -93,6 +94,7 @@ class GuardEngine(private val graph: AppGraph) {
     fun onScreenOff() {
         screenOn = false
         host?.cancelSchedule()
+        EnforcementScheduler.cancel(graph.app)
         session = null
     }
 
@@ -112,6 +114,29 @@ class GuardEngine(private val graph: AppGraph) {
             val plan = withContext(Dispatchers.IO) { plan(packageName) }
             if (ticket != generation.get()) return@launch
             apply(plan)
+        }
+    }
+
+    /** AlarmManager / health-worker entry: re-evaluate a specific or last-known package. */
+    fun onEnforcementAlarm(packageName: String) {
+        if (!screenOn) {
+            screenOn = host?.screenInteractive() ?: true
+        }
+        if (!screenOn) return
+        val target = packageName.ifBlank { session?.packageName }.orEmpty()
+        if (target.isBlank()) {
+            recheckForeground()
+            return
+        }
+        onForeground(target, immediate = true)
+    }
+
+    fun recheckForeground() {
+        scope.launch {
+            val resumed = session?.packageName
+                ?: withContext(Dispatchers.IO) { graph.usage.lastResumedPackage() }
+                ?: return@launch
+            onForeground(resumed, immediate = true)
         }
     }
 
@@ -159,6 +184,7 @@ class GuardEngine(private val graph: AppGraph) {
                 sticky = false
                 host?.hideBlock()
                 host?.cancelSchedule()
+                EnforcementScheduler.cancel(graph.app)
             }
             onDone(error)
         }
@@ -168,8 +194,8 @@ class GuardEngine(private val graph: AppGraph) {
         if (packageName == TEST_PACKAGE || groupId == 0L) return "测试拦截不能放行"
         val now = graph.clock.now()
         val zone = graph.clock.zone()
-        val stored = graph.groups.findByPackage(packageName) ?: return "这个应用已不在限制组中"
-        if (stored.group.id != groupId) return "分组已变化，请重新打开应用"
+        val membership = graph.groups.findByPackage(packageName)
+        if (membership.none { it.group.id == groupId }) return "这个应用已不在该分组中"
         val grants = graph.overrides.grantedOn(groupId, UsageDay.localDate(now, zone), zone)
         val rejection = EmergencyRelease.rejection(reason, Instant.ofEpochMilli(waitStartedAtMs), now, grants.size)
         if (rejection != null) return rejection
@@ -196,18 +222,61 @@ class GuardEngine(private val graph: AppGraph) {
         if (safety) {
             return Plan(packageName, BlockDecision.Allow, null, home, "", 0, null)
         }
-        val stored = graph.groups.findByPackage(packageName)
-            ?: return Plan(packageName, BlockDecision.Allow, null, home, graph.groups.label(packageName), 0, null)
-        val group = stored.group
+        val storedGroups = graph.groups.findByPackage(packageName)
+        if (storedGroups.isEmpty()) {
+            return Plan(packageName, BlockDecision.Allow, null, home, graph.groups.label(packageName), 0, null, emptyList())
+        }
         val calendar = graph.workdays.calendar()
         val today = UsageDay.localDate(now, zone)
+        val evaluator = RuleEvaluator(calendar)
+        val judged = storedGroups.map { stored ->
+            judge(stored, packageName, now, zone, today, calendar, evaluator, open)
+        }
+        val blocks = judged.mapNotNull { row -> (row.decision as? BlockDecision.Block)?.let { row to it } }
+        if (blocks.isNotEmpty()) {
+            val chosenDecision = RestrictionUnion.strictest(blocks.map { it.second }) as BlockDecision.Block
+            val chosen = blocks.first { it.second == chosenDecision }
+            return Plan(
+                packageName = packageName,
+                decision = chosenDecision,
+                group = chosen.first.group,
+                home = home,
+                label = graph.groups.label(packageName),
+                grantsToday = chosen.first.grantsToday,
+                delayMs = null,
+                blocks = blocks.map { it.second },
+            )
+        }
+        return Plan(
+            packageName = packageName,
+            decision = BlockDecision.Allow,
+            group = storedGroups.first().group,
+            home = home,
+            label = graph.groups.label(packageName),
+            grantsToday = 0,
+            delayMs = judged.mapNotNull { it.delayMs }.minOrNull(),
+            blocks = emptyList(),
+        )
+    }
+
+    private suspend fun judge(
+        stored: app.shijie.data.StoredGroup,
+        packageName: String,
+        now: Instant,
+        zone: java.time.ZoneId,
+        today: java.time.LocalDate,
+        calendar: app.shijie.domain.WorkdayCalendar,
+        evaluator: RuleEvaluator,
+        open: OpenSession?,
+    ): Judged {
+        val group = stored.group
         val grants = graph.overrides.grantedOn(group.id, today, zone)
         val overlapping = graph.overrides.overlapping(group.id, today, zone)
         val active = overlapping.lastOrNull {
             EmergencyRelease.isCurrentlyActive(it, now, graph.clock.bootId(), packageName)
         }
         val used = graph.usage.quotaUsed(stored.packages.toSet(), group, overlapping, open)
-        var decision = RuleEvaluator(calendar).evaluate(
+        var decision = evaluator.evaluate(
             packageName,
             now,
             GroupUsage(
@@ -226,26 +295,19 @@ class GuardEngine(private val graph: AppGraph) {
             )
             if (delay != null && delay <= 0L) {
                 val minute = GroupSchedule.minuteOf(now, zone)
-                val inWindow = WindowMerger.merge(group.blockWindows).any { it.contains(minute) }
+                val windows = WindowMerger.merge(group.blockWindows)
+                val inWindow = windows.any { it.contains(minute) }
                 decision = BlockDecision.Block(
                     reason = if (inWindow) BlockReason.BLOCK_WINDOW else BlockReason.QUOTA_EXHAUSTED,
                     groupId = group.id,
                     groupName = group.name,
-                    endsAt = if (inWindow) GroupSchedule.currentWindowEnd(now, zone, WindowMerger.merge(group.blockWindows))
+                    endsAt = if (inWindow) GroupSchedule.currentWindowEnd(now, zone, windows)
                     else UsageDay.nextStart(today, zone),
                 )
                 delay = null
             }
         }
-        return Plan(
-            packageName = packageName,
-            decision = decision,
-            group = group,
-            home = home,
-            label = graph.groups.label(packageName),
-            grantsToday = grants.size,
-            delayMs = delay,
-        )
+        return Judged(group, decision, grants.size, delay)
     }
 
     private fun apply(plan: Plan) {
@@ -262,13 +324,16 @@ class GuardEngine(private val graph: AppGraph) {
                     current.hideBlock()
                 }
                 current.cancelSchedule()
+                EnforcementScheduler.cancel(graph.app)
                 val delay = plan.delayMs
                 if (screenOn && delay != null && delay > 0L && plan.group != null) {
                     current.schedule(delay) { onForeground(plan.packageName, immediate = true) }
+                    EnforcementScheduler.schedule(graph.app, delay, plan.packageName)
                 }
             }
             is BlockDecision.Block -> {
                 current.cancelSchedule()
+                EnforcementScheduler.cancel(graph.app)
                 sticky = true
                 current.goHome()
                 current.showBlock(
@@ -278,7 +343,7 @@ class GuardEngine(private val graph: AppGraph) {
                         groupId = decision.groupId,
                         groupName = decision.groupName,
                         reason = decision.reason,
-                        detail = detail(decision, plan.group),
+                        detail = detail(decision, plan.group, plan.blocks),
                         releaseAvailable = plan.grantsToday < EmergencyRelease.MAX_PER_GROUP_PER_DAY,
                         test = false,
                     ),
@@ -288,7 +353,11 @@ class GuardEngine(private val graph: AppGraph) {
         }
     }
 
-    private fun detail(decision: BlockDecision.Block, group: RestrictionGroup?): String {
+    private fun detail(
+        decision: BlockDecision.Block,
+        group: RestrictionGroup?,
+        blocks: List<BlockDecision.Block>,
+    ): String {
         val zone = graph.clock.zone()
         val now = graph.clock.now()
         val until = decision.endsAt?.atZone(zone)
@@ -298,12 +367,28 @@ class GuardEngine(private val graph: AppGraph) {
             val clock = until.format(CLOCK)
             if (until.toLocalDate() == UsageDay.localDate(now, zone)) "约至 $clock" else "约至次日 $clock"
         }
+        if (blocks.size > 1) {
+            val parts = blocks.map { block ->
+                when (block.reason) {
+                    BlockReason.BLOCK_WINDOW -> "「${block.groupName}」正处于禁用时段"
+                    BlockReason.QUOTA_EXHAUSTED -> "「${block.groupName}」的今日额度已用完"
+                }
+            }
+            return (parts.joinToString("，") + " " + untilText).trim()
+        }
         val windowText = group?.blockWindows?.let { formatWindow(WindowMerger.merge(it).firstOrNull() ?: return@let "") }.orEmpty()
         return when (decision.reason) {
             BlockReason.BLOCK_WINDOW -> "「${decision.groupName}」正处于禁用时段 $windowText $untilText".trim()
             BlockReason.QUOTA_EXHAUSTED -> "「${decision.groupName}」的今日额度已用完 $untilText".trim()
         }
     }
+
+    private data class Judged(
+        val group: RestrictionGroup,
+        val decision: BlockDecision,
+        val grantsToday: Int,
+        val delayMs: Long?,
+    )
 
     private data class Plan(
         val packageName: String,
@@ -313,6 +398,7 @@ class GuardEngine(private val graph: AppGraph) {
         val label: String,
         val grantsToday: Int,
         val delayMs: Long?,
+        val blocks: List<BlockDecision.Block> = emptyList(),
     )
 
     companion object {

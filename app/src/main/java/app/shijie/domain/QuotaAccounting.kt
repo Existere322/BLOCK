@@ -101,41 +101,144 @@ object ForegroundSpans {
         rangeEnd: Instant,
     ): List<ForegroundSpan> {
         if (!rangeEnd.isAfter(rangeStart)) return emptyList()
-        val sorted = events.sortedWith(compareBy<ForegroundEvent> { it.at }.thenBy { if (it.kind == ForegroundEventKind.PAUSE) 0 else 1 })
-        val open = linkedMapOf<String, Instant>()
         val spans = mutableListOf<ForegroundSpan>()
-        fun emit(packageName: String, start: Instant, end: Instant) {
-            val clampedStart = if (start.isBefore(rangeStart)) rangeStart else start
-            val clampedEnd = if (end.isAfter(rangeEnd)) rangeEnd else end
-            if (clampedEnd.isAfter(clampedStart)) {
-                spans += ForegroundSpan(packageName, clampedStart, clampedEnd)
-            }
-        }
-        for (event in sorted) {
+        val replay = SessionReplay()
+        for (event in events.sortedBy { it.at }) {
             if (event.at.isAfter(rangeEnd)) break
-            when (event.kind) {
-                ForegroundEventKind.RESUME -> {
-                    open[event.packageName]?.let { previous -> emit(event.packageName, previous, event.at) }
-                    open[event.packageName] = event.at
-                }
-                ForegroundEventKind.PAUSE -> {
-                    open.remove(event.packageName)?.let { previous -> emit(event.packageName, previous, event.at) }
-                }
+            replay.apply(event) { packageName, start, end ->
+                spans += clamp(packageName, start, end, rangeStart, rangeEnd)
             }
         }
-        for ((packageName, start) in open) {
-            emit(packageName, start, rangeEnd)
+        replay.finish(rangeEnd) { packageName, start, end ->
+            spans += clamp(packageName, start, end, rangeStart, rangeEnd)
         }
-        return spans
+        return spans.filter { it.end.isAfter(it.start) }
+    }
+
+    /** Package that still has a resumed activity at [at], matching UsageStats activity state. */
+    fun foregroundPackage(events: List<ForegroundEvent>, at: Instant): String? {
+        val replay = SessionReplay()
+        for (event in events.sortedBy { it.at }) {
+            if (event.at.isAfter(at)) break
+            replay.apply(event) { _, _, _ -> }
+        }
+        return replay.foregroundPackage()
+    }
+
+    private fun clamp(
+        packageName: String,
+        start: Instant,
+        end: Instant,
+        rangeStart: Instant,
+        rangeEnd: Instant,
+    ): ForegroundSpan {
+        val clampedStart = if (start.isBefore(rangeStart)) rangeStart else start
+        val clampedEnd = if (end.isAfter(rangeEnd)) rangeEnd else end
+        return ForegroundSpan(packageName, clampedStart, clampedEnd)
     }
 }
 
-enum class ForegroundEventKind { RESUME, PAUSE }
+/**
+ * Replays foreground time from usage events.
+ *
+ * Activity switches inside one app emit pause/stop for the old screen after the
+ * new screen is already resumed. Those events must not end the package: stop is
+ * ignored, and a pause within two seconds of the latest resume is treated as the
+ * handoff, not as leaving the app. A resume also means the screen is in use, so a
+ * missed screen-on event cannot drop the rest of the day.
+ */
+private class SessionReplay {
+    private val resumed = HashMap<String, HashMap<Int, Boolean>>()
+    private val lastResumeAt = HashMap<String, Instant>()
+    private val open = HashMap<String, Instant>()
+    private var screenOn = true
+
+    fun foregroundPackage(): String? {
+        val active = resumed.filterValues { instances -> instances.values.any { it } }.keys
+        if (active.isEmpty()) return null
+        return active.maxByOrNull { lastResumeAt[it] ?: Instant.EPOCH }
+    }
+
+    fun apply(event: ForegroundEvent, emit: (String, Instant, Instant) -> Unit) {
+        when (event.kind) {
+            ForegroundEventKind.SCREEN_OFF -> {
+                screenOn = false
+                closeOpen(event.at, emit)
+            }
+            ForegroundEventKind.SCREEN_ON -> {
+                screenOn = true
+                for (packageName in resumed.keys) ensureOpen(packageName, event.at)
+            }
+            ForegroundEventKind.SHUTDOWN -> {
+                closeOpen(event.at, emit)
+                resumed.clear()
+            }
+            ForegroundEventKind.RESUME -> {
+                if (event.packageName.isEmpty()) return
+                screenOn = true
+                for (other in resumed.keys.toList()) {
+                    if (other == event.packageName) continue
+                    val instances = resumed[other] ?: continue
+                    if (instances.values.none { it }) continue
+                    instances.keys.toList().forEach { instances[it] = false }
+                    closeIfIdle(other, event.at, emit)
+                }
+                resumed.getOrPut(event.packageName) { HashMap() }[event.instanceKey] = true
+                lastResumeAt[event.packageName] = event.at
+                ensureOpen(event.packageName, event.at)
+            }
+            ForegroundEventKind.PAUSE -> {
+                val resumedAt = lastResumeAt[event.packageName]
+                if (resumedAt != null && !event.at.isBefore(resumedAt) &&
+                    Duration.between(resumedAt, event.at) <= HANDOFF
+                ) {
+                    return
+                }
+                val instances = resumed[event.packageName] ?: return
+                if (instances[event.instanceKey] == true) instances[event.instanceKey] = false
+                if (screenOn) closeIfIdle(event.packageName, event.at, emit)
+            }
+            ForegroundEventKind.STOP -> Unit
+        }
+    }
+
+    fun finish(at: Instant, emit: (String, Instant, Instant) -> Unit) {
+        if (screenOn) closeOpen(at, emit)
+    }
+
+    private fun isResumed(packageName: String): Boolean {
+        return resumed[packageName]?.values?.any { it } == true
+    }
+
+    private fun ensureOpen(packageName: String, at: Instant) {
+        if (!screenOn || !isResumed(packageName) || open.containsKey(packageName)) return
+        open[packageName] = at
+    }
+
+    private fun closeIfIdle(packageName: String, at: Instant, emit: (String, Instant, Instant) -> Unit) {
+        if (isResumed(packageName)) return
+        val start = open.remove(packageName) ?: return
+        emit(packageName, start, at)
+    }
+
+    private fun closeOpen(at: Instant, emit: (String, Instant, Instant) -> Unit) {
+        val closing = open.toMap()
+        open.clear()
+        for ((packageName, start) in closing) emit(packageName, start, at)
+    }
+
+    private companion object {
+        val HANDOFF: Duration = Duration.ofSeconds(2)
+    }
+}
+
+enum class ForegroundEventKind { RESUME, PAUSE, STOP, SCREEN_ON, SCREEN_OFF, SHUTDOWN }
 
 data class ForegroundEvent(
     val packageName: String,
     val at: Instant,
     val kind: ForegroundEventKind,
+    val instanceKey: Int = 0,
 )
 
 data class ForegroundSpan(

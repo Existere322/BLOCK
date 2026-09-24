@@ -17,6 +17,20 @@ object GroupSchedule {
         }
     }
 
+    /**
+     * Overnight windows (e.g. 23:00–11:00) belong to the calendar day they started.
+     * After midnight, keep using yesterday's day-policy so a Friday night block
+     * still holds on Saturday morning.
+     */
+    fun effectiveScheduleDate(now: Instant, zone: ZoneId, windows: List<BlockWindow>): LocalDate {
+        val date = now.atZone(zone).toLocalDate()
+        val minute = minuteOf(now, zone)
+        val inOvernightContinuation = windows.any { window ->
+            window.startMinute > window.endMinute && minute < window.endMinute
+        }
+        return if (inOvernightContinuation) date.minusDays(1) else date
+    }
+
     fun minuteOf(now: Instant, zone: ZoneId): Int {
         val zoned = now.atZone(zone)
         return zoned.hour * 60 + zoned.minute
@@ -69,13 +83,14 @@ class RuleEvaluator(
         if (groupUsage == null || groupUsage.isSafetyWhitelisted) return BlockDecision.Allow
         val group = groupUsage.group
         val zone = groupUsage.zone
-        val date = UsageDay.localDate(now, zone)
-        if (!GroupSchedule.isActive(group, date, calendar)) return BlockDecision.Allow
+        val calendarDate = UsageDay.localDate(now, zone)
+        val windows = WindowMerger.merge(group.blockWindows)
+        val scheduleDate = GroupSchedule.effectiveScheduleDate(now, zone, windows)
+        if (!GroupSchedule.isActive(group, scheduleDate, calendar)) return BlockDecision.Allow
         val release = groupUsage.temporaryOverride
         if (release != null && EmergencyRelease.isCurrentlyActive(release, now, groupUsage.bootId, packageName)) {
             return BlockDecision.Allow
         }
-        val windows = WindowMerger.merge(group.blockWindows)
         val minute = GroupSchedule.minuteOf(now, zone)
         if (windows.any { it.contains(minute) }) {
             return BlockDecision.Block(
@@ -85,12 +100,14 @@ class RuleEvaluator(
                 endsAt = GroupSchedule.currentWindowEnd(now, zone, windows),
             )
         }
+        // Quota follows the local calendar day, not the overnight schedule day.
+        if (!GroupSchedule.isActive(group, calendarDate, calendar)) return BlockDecision.Allow
         if (groupUsage.usedMillis >= group.dailyQuota.toMillis()) {
             return BlockDecision.Block(
                 reason = BlockReason.QUOTA_EXHAUSTED,
                 groupId = group.id,
                 groupName = group.name,
-                endsAt = UsageDay.nextStart(date, zone),
+                endsAt = UsageDay.nextStart(calendarDate, zone),
             )
         }
         return BlockDecision.Allow
@@ -111,7 +128,8 @@ object TransitionPlanner {
         }
         val today = UsageDay.localDate(now, zone)
         val merged = WindowMerger.merge(group.blockWindows)
-        if (GroupSchedule.isActive(group, today, calendar) &&
+        val scheduleDate = GroupSchedule.effectiveScheduleDate(now, zone, merged)
+        if (GroupSchedule.isActive(group, scheduleDate, calendar) &&
             merged.any { it.contains(GroupSchedule.minuteOf(now, zone)) }
         ) {
             return 0L
@@ -135,12 +153,19 @@ object TransitionPlanner {
         calendar: WorkdayCalendar,
     ): String {
         val today = UsageDay.localDate(now, zone)
-        if (!GroupSchedule.isActive(group, today, calendar)) return "今日规则不生效"
         val merged = WindowMerger.merge(group.blockWindows)
+        val scheduleDate = GroupSchedule.effectiveScheduleDate(now, zone, merged)
+        if (!GroupSchedule.isActive(group, scheduleDate, calendar) &&
+            !GroupSchedule.isActive(group, today, calendar)
+        ) {
+            return "今日规则不生效"
+        }
         if (merged.isEmpty()) return "未设置禁用时段"
         val minute = GroupSchedule.minuteOf(now, zone)
         val current = merged.firstOrNull { it.contains(minute) }
-        if (current != null) return "进行中 ${formatWindow(current)}"
+        if (current != null && GroupSchedule.isActive(group, scheduleDate, calendar)) {
+            return "进行中 ${formatWindow(current)}"
+        }
         val next = GroupSchedule.nextWindowStart(now, zone, group, calendar) ?: return "近期没有禁用时段"
         val zoned = next.atZone(zone)
         val window = merged.firstOrNull { it.startMinute == zoned.hour * 60 + zoned.minute }

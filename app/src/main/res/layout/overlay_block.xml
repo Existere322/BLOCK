@@ -2,7 +2,7 @@
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#E614181C"
+    android:background="@android:color/transparent"
     android:fillViewport="true">
 
     <LinearLayout
@@ -22,70 +22,68 @@
                 android:id="@+id/overlay_title"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textColor="#1E2A32"
-                android:textSize="24sp"
+                android:textColor="#242424"
+                android:textSize="22sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/overlay_reason"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:textColor="#3C4A52"
-                android:textSize="18sp" />
+                android:layout_marginTop="16dp"
+                android:textColor="#242424"
+                android:textSize="16sp" />
 
             <TextView
                 android:id="@+id/overlay_detail"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:textColor="#3C4A52"
-                android:textSize="15sp" />
+                android:textColor="#909090"
+                android:textSize="14sp" />
 
             <TextView
                 android:id="@+id/overlay_release_hint"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
-                android:textColor="#1E2A32"
+                android:textColor="#909090"
                 android:textSize="14sp" />
 
             <EditText
                 android:id="@+id/overlay_reason_input"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/overlay_input"
                 android:hint="写下一句非空理由"
                 android:importantForAutofill="no"
                 android:inputType="textCapSentences|textMultiLine"
                 android:minHeight="48dp"
-                android:textColor="#1E2A32" />
+                android:textColor="#242424"
+                android:textColorHint="#A2A2A2" />
 
             <Button
                 android:id="@+id/overlay_release"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="应急放行 5 分钟" />
+                android:layout_height="56dp"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/overlay_button_secondary"
+                android:backgroundTint="@null"
+                android:stateListAnimator="@null"
+                android:text="应急放行 5 分钟"
+                android:textColor="#242424" />
 
             <Button
                 android:id="@+id/overlay_dismiss"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="我知道了" />
-
-            <Button
-                android:id="@+id/overlay_open_app"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="打开时界" />
-
-            <Button
-                android:id="@+id/overlay_open_settings"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="系统设置" />
+                android:layout_height="56dp"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/overlay_button"
+                android:backgroundTint="@null"
+                android:stateListAnimator="@null"
+                android:text="我知道了"
+                android:textColor="#FFFFFF" />
         </LinearLayout>
     </LinearLayout>
 </ScrollView>
