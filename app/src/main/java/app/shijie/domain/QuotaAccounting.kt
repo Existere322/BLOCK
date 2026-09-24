@@ -115,6 +115,27 @@ object ForegroundSpans {
         return spans.filter { it.end.isAfter(it.start) }
     }
 
+    /**
+     * Continues a saved replay from [cursor] through events in
+     * `[cursor.positionMs, readUntilMs)`. The returned cursor sits at [readUntilMs],
+     * so the next system query can start there without reading this slice again.
+     */
+    fun advance(cursor: UsageCursor, events: List<ForegroundEvent>, readUntilMs: Long): UsageAdvance {
+        val replay = SessionReplay.from(cursor.replay)
+        val closed = mutableListOf<ForegroundSpan>()
+        for (event in events.sortedBy { it.at }) {
+            val at = event.at.toEpochMilli()
+            if (at < cursor.positionMs || at >= readUntilMs) continue
+            replay.apply(event) { packageName, start, end ->
+                if (end.isAfter(start)) closed += ForegroundSpan(packageName, start, end)
+            }
+        }
+        val position = maxOf(cursor.positionMs, readUntilMs)
+        return UsageAdvance(UsageCursor(position, replay.export()), closed)
+    }
+
+    fun foregroundPackage(state: ReplayState): String? = SessionReplay.from(state).foregroundPackage()
+
     /** Package that still has a resumed activity at [at], matching UsageStats activity state. */
     fun foregroundPackage(events: List<ForegroundEvent>, at: Instant): String? {
         val replay = SessionReplay()
@@ -197,6 +218,38 @@ private class SessionReplay {
 
     fun finish(at: Instant, emit: (String, Instant, Instant) -> Unit) {
         if (screenOn) closeOpen(at, emit)
+    }
+
+    fun export(): ReplayState {
+        val activities = mutableListOf<TrackedActivity>()
+        resumed.forEach { (packageName, instances) ->
+            val last = lastResumeAt[packageName]?.toEpochMilli() ?: 0L
+            instances.forEach { (instanceKey, active) ->
+                if (active) activities += TrackedActivity(packageName, instanceKey, last)
+            }
+        }
+        return ReplayState(
+            screenOn = screenOn,
+            openStartsMs = open.mapValues { it.value.toEpochMilli() },
+            activities = activities,
+        )
+    }
+
+    companion object {
+        fun from(state: ReplayState): SessionReplay {
+            val replay = SessionReplay()
+            replay.screenOn = state.screenOn
+            state.openStartsMs.forEach { (packageName, startMs) ->
+                replay.open[packageName] = Instant.ofEpochMilli(startMs)
+            }
+            state.activities.forEach { activity ->
+                replay.resumed.getOrPut(activity.packageName) { HashMap() }[activity.instanceKey] = true
+                val at = Instant.ofEpochMilli(activity.lastResumeMs)
+                val previous = replay.lastResumeAt[activity.packageName]
+                if (previous == null || at.isAfter(previous)) replay.lastResumeAt[activity.packageName] = at
+            }
+            return replay
+        }
     }
 
     private fun isResumed(packageName: String): Boolean {

@@ -88,6 +88,17 @@ data class DailyUsageEntity(
 )
 
 @Entity(
+    tableName = "hourly_usage",
+    primaryKeys = ["date", "hour", "packageName"],
+)
+data class HourlyUsageEntity(
+    val date: String,
+    val hour: Int,
+    val packageName: String,
+    val foregroundMillis: Long,
+)
+
+@Entity(
     tableName = "temporary_overrides",
     foreignKeys = [
         ForeignKey(
@@ -182,6 +193,24 @@ interface UsageDao {
 
     @Query("DELETE FROM daily_usage WHERE date < :date")
     suspend fun deleteBefore(date: String)
+
+    @Query("DELETE FROM daily_usage")
+    suspend fun deleteAll()
+}
+
+@Dao
+interface HourlyUsageDao {
+    @Query("SELECT * FROM hourly_usage WHERE date = :date")
+    suspend fun forDate(date: String): List<HourlyUsageEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(rows: List<HourlyUsageEntity>)
+
+    @Query("DELETE FROM hourly_usage WHERE date < :date")
+    suspend fun deleteBefore(date: String)
+
+    @Query("DELETE FROM hourly_usage")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -236,15 +265,17 @@ interface MetaDao {
         BlockWindowEntity::class,
         WorkdayEntity::class,
         DailyUsageEntity::class,
+        HourlyUsageEntity::class,
         OverrideEntity::class,
         MetaEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class ShijieDatabase : RoomDatabase() {
     abstract fun groups(): GroupDao
     abstract fun usage(): UsageDao
+    abstract fun hourly(): HourlyUsageDao
     abstract fun overrides(): OverrideDao
     abstract fun workdays(): WorkdayDao
     abstract fun meta(): MetaDao
@@ -264,6 +295,14 @@ abstract class ShijieDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `group_apps_new` RENAME TO `group_apps`")
                 db.execSQL(
                     "CREATE INDEX IF NOT EXISTS `index_group_apps_groupId` ON `group_apps` (`groupId`)",
+                )
+            }
+        }
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `hourly_usage` (`date` TEXT NOT NULL, `hour` INTEGER NOT NULL, `packageName` TEXT NOT NULL, `foregroundMillis` INTEGER NOT NULL, PRIMARY KEY(`date`, `hour`, `packageName`))",
                 )
             }
         }
@@ -297,7 +336,7 @@ abstract class ShijieDatabase : RoomDatabase() {
                     context.applicationContext,
                     ShijieDatabase::class.java,
                     "shijie.db",
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
             }
         }
     }

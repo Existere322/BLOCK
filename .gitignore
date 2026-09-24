@@ -4,10 +4,7 @@
 /build/
 /app/build/
 /local.properties
-/work/jdk-*/
-/work/android-sdk/
-/work/downloads/
-/work/gradle-*/
+/work/
 /keystore/*.jks
 /keystore/*.properties
 /keystore/credentials.local.txt

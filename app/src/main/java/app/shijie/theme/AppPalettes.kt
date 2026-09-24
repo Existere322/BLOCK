@@ -46,29 +46,36 @@ object AppPalettes {
         ),
     )
 
+    /**
+     * Nam Design Coffee Shop color guide (Figma styleguide → Colors):
+     * 01 #C67C4E, 02 #EDD6C8, 03 #313131, 04 #E3E3E3, 05 #F9F2ED.
+     * Cards stay white, matching the swatch plates in that guide.
+     * [muted] is 03 laid over 05 so captions stay readable.
+     * [search] is 03 darkened so chips and buttons still show on a 03 header.
+     */
     val coffee = Palette(
-        page = 0xFFF6F3EC.toInt(),
-        white = 0xFFFFFCF7.toInt(),
-        ink = 0xFF1C2428.toInt(),
-        inkSoft = 0xFF12110F.toInt(),
-        muted = 0xFF3C4A52.toInt(),
-        muted2 = 0xFFD5DEE3.toInt(),
-        accent = 0xFFA56B12.toInt(),
-        cream = 0xFFF8E6C4.toInt(),
-        tan = 0xFFE7E1D6.toInt(),
-        search = 0xFF1A2830.toInt(),
-        track = 0xFFE7E1D6.toInt(),
-        line = 0xFFD5D0C6.toInt(),
-        green = 0xFF2F6F6A.toInt(),
+        page = 0xFFF9F2ED.toInt(),
+        white = 0xFFFFFFFF.toInt(),
+        ink = 0xFF313131.toInt(),
+        inkSoft = 0xFF313131.toInt(),
+        muted = 0xFF6B6764.toInt(),
+        muted2 = 0xFFE3E3E3.toInt(),
+        accent = 0xFFC67C4E.toInt(),
+        cream = 0xFFEDD6C8.toInt(),
+        tan = 0xFFEDD6C8.toInt(),
+        search = 0xFF242424.toInt(),
+        track = 0xFFE3E3E3.toInt(),
+        line = 0xFFE3E3E3.toInt(),
+        green = 0xFFC67C4E.toInt(),
         groups = listOf(
-            0xFF2C4552.toInt(),
-            0xFF5E7381.toInt(),
-            0xFF2F6F6A.toInt(),
-            0xFFC48A2A.toInt(),
-            0xFF8D6E63.toInt(),
-            0xFF3E6B8A.toInt(),
-            0xFF6B5B95.toInt(),
-            0xFFB06A3B.toInt(),
+            0xFFC67C4E.toInt(),
+            0xFF313131.toInt(),
+            0xFF8F5432.toInt(),
+            0xFFD4A07A.toInt(),
+            0xFF5C4033.toInt(),
+            0xFFA67C52.toInt(),
+            0xFF6E4B3A.toInt(),
+            0xFFEDD6C8.toInt(),
         ),
     )
 

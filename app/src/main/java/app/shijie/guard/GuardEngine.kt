@@ -81,13 +81,15 @@ class GuardEngine(private val graph: AppGraph) {
         scope.launch {
             withContext(Dispatchers.IO) {
                 graph.overrides.cancelOtherBoots(graph.clock.bootId(), graph.clock.now())
-                if (app.shijie.system.Permissions.usageGranted(graph.app)) {
-                    val today = UsageDay.localDate(graph.clock.now(), graph.clock.zone())
-                    graph.usage.reconcile(today.minusDays(2), today)
-                }
             }
             val resumed = withContext(Dispatchers.IO) { graph.usage.lastResumedPackage() }
             if (resumed != null) onForeground(resumed, immediate = true)
+            withContext(Dispatchers.IO) {
+                if (app.shijie.system.Permissions.usageGranted(graph.app)) {
+                    val today = UsageDay.localDate(graph.clock.now(), graph.clock.zone())
+                    graph.usage.reconcile(today.minusDays(6), today)
+                }
+            }
         }
     }
 
@@ -96,12 +98,18 @@ class GuardEngine(private val graph: AppGraph) {
         host?.cancelSchedule()
         EnforcementScheduler.cancel(graph.app)
         session = null
+        scope.launch {
+            withContext(Dispatchers.IO) { graph.usage.flushRecent() }
+        }
     }
 
     fun onScreenOn() {
         screenOn = true
         scope.launch {
-            val resumed = withContext(Dispatchers.IO) { graph.usage.lastResumedPackage() } ?: return@launch
+            val resumed = withContext(Dispatchers.IO) {
+                graph.usage.flushRecent()
+                graph.usage.lastResumedPackage()
+            } ?: return@launch
             onForeground(resumed, immediate = true)
         }
     }
@@ -132,6 +140,7 @@ class GuardEngine(private val graph: AppGraph) {
     }
 
     fun recheckForeground() {
+        if (!screenOn) return
         scope.launch {
             val resumed = session?.packageName
                 ?: withContext(Dispatchers.IO) { graph.usage.lastResumedPackage() }
