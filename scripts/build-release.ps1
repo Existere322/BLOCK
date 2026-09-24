@@ -48,7 +48,7 @@ $name = "$([char]0x65F6)$([char]0x754C)-release.apk"
 $out = Join-Path $dist $name
 Copy-Item $apk $out -Force
 $hash = (Get-FileHash $out -Algorithm SHA256).Hash.ToLower()
-Set-Content -Path (Join-Path $dist "$name.sha256") -Value "$hash  $name" -Encoding ascii
+Set-Content -Path (Join-Path $dist "$name.sha256") -Value "$hash  $name" -Encoding utf8
 
 $buildTools = Get-ChildItem (Join-Path $env:ANDROID_HOME "build-tools") -Directory | Sort-Object Name -Descending | Select-Object -First 1
 $aapt = Join-Path $buildTools.FullName "aapt.exe"

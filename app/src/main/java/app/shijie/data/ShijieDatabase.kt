@@ -239,7 +239,7 @@ interface MetaDao {
         OverrideEntity::class,
         MetaEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class ShijieDatabase : RoomDatabase() {
@@ -268,13 +268,36 @@ abstract class ShijieDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Replace the original preset swatches in existing groups so upgrades use the
+                // new palette too. Colors outside that preset remain user controlled.
+                val swatches = listOf(
+                    0xFFC67C4E.toInt() to 0xFF1468E8.toInt(),
+                    0xFF527A73.toInt() to 0xFF9137D7.toInt(),
+                    0xFF78885A.toInt() to 0xFFF18A27.toInt(),
+                    0xFFC19A56.toInt() to 0xFF249A87.toInt(),
+                    0xFF81708E.toInt() to 0xFF5E73D7.toInt(),
+                    0xFFCA786C.toInt() to 0xFFE36D79.toInt(),
+                    0xFF5E748D.toInt() to 0xFF5C829D.toInt(),
+                    0xFF806653.toInt() to 0xFF9671A6.toInt(),
+                )
+                swatches.forEach { (old, replacement) ->
+                    db.execSQL(
+                        "UPDATE restriction_groups SET colorArgb = ? WHERE colorArgb = ?",
+                        arrayOf(replacement, old),
+                    )
+                }
+            }
+        }
+
         fun get(context: Context): ShijieDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     ShijieDatabase::class.java,
                     "shijie.db",
-                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
             }
         }
     }

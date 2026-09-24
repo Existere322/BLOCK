@@ -170,7 +170,7 @@ private fun titleFor(route: String?, groupId: Long?): String = when (route) {
     "coloros" -> "后台引导"
     "privacy" -> "隐私说明"
     "group/{id}" -> if (groupId == 0L) "新建分组" else "编辑分组"
-    else -> "时界"
+    else -> "BLOCK"
 }
 
 @Composable

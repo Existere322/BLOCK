@@ -14,7 +14,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -23,7 +22,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -46,18 +44,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.shijie.data.RankedApp
 import app.shijie.domain.ChartColumn
+import app.shijie.domain.ChartLayout
 import app.shijie.domain.ChartSlice
 import app.shijie.domain.formatDurationMinutes
 import kotlinx.coroutines.Dispatchers
@@ -130,7 +136,7 @@ private fun rangeAt(index: Int): StatsRange = when (index) {
 private fun StatsRangePage(stats: StatsUi) {
     val total = stats.columns.sumOf { it.uniqueMillis }
     val hourly = stats.range == StatsRange.TODAY
-    val card = RoundedCornerShape(16.dp)
+    val card = RoundedCornerShape(10.dp)
     Column(
         Modifier
             .fillMaxSize()
@@ -213,7 +219,7 @@ private fun CategoryLegend(items: List<ChartSlice>, modifier: Modifier = Modifie
                         Column(Modifier.padding(start = 8.dp)) {
                             Text(
                                 slice.name,
-                                color = Color(slice.colorArgb),
+                                color = CafeInkSoft,
                                 style = MaterialTheme.typography.labelMedium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -249,33 +255,33 @@ private fun UsageBars(columns: List<ChartColumn>, hourly: Boolean, modifier: Mod
     val growth by animateFloatAsState(if (played) 1f else 0f, tween(700), label = "bars")
     LaunchedEffect(columns) { played = true }
     val labelStyle = MaterialTheme.typography.labelSmall.copy(color = CafeMuted)
+    val corner = 4.dp
     Column(modifier) {
         Row(Modifier.fillMaxWidth().weight(1f)) {
             Canvas(Modifier.weight(1f).fillMaxHeight()) {
-                val levels = if (hourly) listOf(1f, 0.5f, 0f) else listOf(1f, 16f / 24f, 8f / 24f, 0f)
+                val levels = if (hourly) listOf(0.5f) else listOf(16f / 24f, 8f / 24f)
+                val dash = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 5.dp.toPx()), 0f)
+                val grid = lighten(CafeLine, 0.55f)
                 levels.forEach { level ->
                     val y = size.height * (1f - level)
                     drawLine(
-                        color = CafeLine,
+                        color = grid,
                         start = Offset(0f, y),
                         end = Offset(size.width, y),
                         strokeWidth = 1.dp.toPx(),
+                        pathEffect = dash,
                     )
                 }
-                val count = columns.size
-                val week = !hourly && count <= 8
-                val gap = (if (week) 12.dp else if (count > 12) 3.dp else 6.dp).toPx()
-                val natural = if (week) 24.dp.toPx() else ((size.width - gap * (count - 1)) / count)
-                val barWidth = natural.coerceAtLeast(1f)
-                val used = count * barWidth + (count - 1) * gap
-                val origin = if (used < size.width) (size.width - used) / 2f else 0f
+                val geometry = chartGeometry(size.width, columns.size, hourly, this)
+                val radius = corner.toPx()
                 columns.forEachIndexed { index, column ->
-                    val left = origin + index * (barWidth + gap)
+                    val left = geometry.left(index)
+                    val barWidth = geometry.bar
                     drawRoundRect(
                         color = CafeTrack,
                         topLeft = Offset(left, 0f),
                         size = Size(barWidth, size.height),
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidth / 2f),
+                        cornerRadius = CornerRadius(minOf(radius, barWidth / 2f)),
                     )
                     val drawn = column.slices.filter { it.millis > 0L }
                     val attributed = drawn.sumOf { it.millis }
@@ -283,10 +289,22 @@ private fun UsageBars(columns: List<ChartColumn>, hourly: Boolean, modifier: Mod
                     val unique = column.uniqueMillis.coerceAtMost(max).coerceAtLeast(0L)
                     val barHeight = size.height * (unique.toFloat() / max.toFloat()) * growth
                     if (barHeight <= 0.5f) return@forEachIndexed
+                    val roundedFill = Path().apply {
+                        addRoundRect(
+                            RoundRect(
+                                left = left,
+                                top = size.height - barHeight,
+                                right = left + barWidth,
+                                bottom = size.height,
+                                cornerRadius = CornerRadius(minOf(radius, barWidth / 2f, barHeight / 2f)),
+                            ),
+                        )
+                    }
+                    drawContext.canvas.save()
+                    drawContext.canvas.clipPath(roundedFill)
                     var top = size.height
                     drawn.forEach { slice ->
                         val height = barHeight * (slice.millis.toFloat() / attributed.toFloat())
-                        if (height <= 0.5f) return@forEach
                         top -= height
                         drawRect(
                             color = Color(slice.colorArgb),
@@ -294,6 +312,7 @@ private fun UsageBars(columns: List<ChartColumn>, hourly: Boolean, modifier: Mod
                             size = Size(barWidth, height),
                         )
                     }
+                    drawContext.canvas.restore()
                 }
             }
             Column(
@@ -309,31 +328,72 @@ private fun UsageBars(columns: List<ChartColumn>, hourly: Boolean, modifier: Mod
                 }
             }
         }
-        BoxWithConstraints(
-            Modifier
+        AxisLabels(
+            columns = columns,
+            hourly = hourly,
+            style = labelStyle,
+            modifier = Modifier
                 .fillMaxWidth()
-                .padding(end = 60.dp)
-                .height(22.dp),
-        ) {
-            val count = columns.size
-            val week = !hourly && count <= 8
-            val gap = if (week) 12.dp else if (count > 12) 3.dp else 6.dp
-            val natural = if (week) 24.dp else (maxWidth - gap * (count - 1)) / count.coerceAtLeast(1)
-            val bar = if (natural < 1.dp) 1.dp else natural
-            val used = bar * count + gap * (count - 1)
-            val origin = if (used < maxWidth) (maxWidth - used) / 2 else 0.dp
-            axisIndexes(count).forEach { index ->
-                val center = origin + (bar + gap) * index + bar / 2 - 16.dp
-                val x = center.coerceIn(0.dp, (maxWidth - 32.dp).coerceAtLeast(0.dp))
+                .padding(end = 60.dp),
+        )
+    }
+}
+
+@Composable
+private fun AxisLabels(
+    columns: List<ChartColumn>,
+    hourly: Boolean,
+    style: androidx.compose.ui.text.TextStyle,
+    modifier: Modifier = Modifier,
+) {
+    val indexes = axisIndexes(columns.size)
+    val density = LocalDensity.current
+    Layout(
+        content = {
+            indexes.forEach { index ->
                 Text(
                     prettyAxisLabel(columns[index].label),
-                    style = labelStyle,
+                    style = style,
                     maxLines = 1,
-                    modifier = Modifier.offset(x = x),
+                    softWrap = false,
                 )
+            }
+        },
+        modifier = modifier.height(22.dp),
+    ) { measurables, constraints ->
+        val width = constraints.maxWidth.toFloat()
+        val geometry = chartGeometry(width, columns.size, hourly, density)
+        val loose = constraints.copy(minWidth = 0, minHeight = 0, maxWidth = Constraints.Infinity)
+        val placeables = measurables.map { it.measure(loose) }
+        val height = placeables.maxOfOrNull { it.height } ?: 0
+        layout(constraints.maxWidth, height) {
+            placeables.forEachIndexed { slot, placeable ->
+                val center = geometry.center(indexes[slot])
+                val x = (center - placeable.width / 2f).toInt()
+                placeable.placeRelative(x, 0)
             }
         }
     }
+}
+
+private fun chartGeometry(
+    width: Float,
+    count: Int,
+    hourly: Boolean,
+    density: androidx.compose.ui.unit.Density,
+): app.shijie.domain.ChartGeometry {
+    val gap = with(density) { (if (hourly || count > 12) 3.dp else 8.dp).toPx() }
+    val maxBar = with(density) { (if (hourly || count > 12) 14.dp else 28.dp).toPx() }
+    return ChartLayout.bars(width, count, gap, maxBar)
+}
+
+private fun lighten(color: Color, amount: Float): Color {
+    return Color(
+        red = color.red + (1f - color.red) * amount,
+        green = color.green + (1f - color.green) * amount,
+        blue = color.blue + (1f - color.blue) * amount,
+        alpha = color.alpha,
+    )
 }
 
 @Composable

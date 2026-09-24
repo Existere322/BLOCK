@@ -20,7 +20,9 @@ import app.shijie.domain.GroupLock
 import app.shijie.domain.ChartColumn
 import app.shijie.domain.ChartSlice
 import app.shijie.domain.UsageCategories
+import app.shijie.domain.AppTheme
 import app.shijie.domain.formatDuration
+import app.shijie.domain.formatDurationMinutes
 import app.shijie.system.Permissions
 import java.time.DayOfWeek
 import java.time.Duration
@@ -112,6 +114,9 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
     private val _lockLabel = MutableStateFlow<String?>(null)
     val lockLabel: StateFlow<String?> = _lockLabel
 
+    private val _theme = MutableStateFlow(AppTheme.CURRENT)
+    val theme: StateFlow<AppTheme> = _theme
+
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val messages = _messages.asSharedFlow()
 
@@ -119,8 +124,19 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
 
     init {
         viewModelScope.launch {
+            val saved = withContext(Dispatchers.IO) { graph.meta.theme() }
+            _theme.value = saved
+            selectPalette(saved)
             _onboarding.value = withContext(Dispatchers.IO) { graph.meta.isOnboardingDone() }
             refresh()
+        }
+    }
+
+    fun setTheme(theme: AppTheme) {
+        _theme.value = theme
+        selectPalette(theme)
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { graph.meta.setTheme(theme) }
         }
     }
 
@@ -265,6 +281,8 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
                 return@launch
             }
             withContext(Dispatchers.IO) { graph.db.clearAllTables() }
+            _theme.value = AppTheme.CURRENT
+            selectPalette(AppTheme.CURRENT)
             _onboarding.value = false
             refresh()
         }
@@ -311,9 +329,9 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
                     usageLabel = if (!Permissions.usageGranted(graph.app)) {
                         "还不能读取系统使用时间"
                     } else if (active) {
-                        "系统已用 ${formatDuration(used)} · 额度剩余 ${formatDuration(remaining)}"
+                        "系统已用 ${formatDurationMinutes(used)} · 额度剩余 ${formatDuration(remaining)}"
                     } else {
-                        "今日不限制 · 系统已用 ${formatDuration(used)}"
+                        "今日不限制 · 系统已用 ${formatDurationMinutes(used)}"
                     },
                     windowLabel = TransitionPlanner.windowStatusText(now, zone, group, calendar),
                 )
@@ -323,7 +341,7 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
                 guardConnected = graph.guardConnected.value,
                 usageAccess = Permissions.usageGranted(graph.app),
                 notifications = Permissions.notificationsEnabled(graph.app),
-                totalLabel = formatDuration(total),
+                totalLabel = formatDurationMinutes(total),
                 uncovered = status.uncoveredYear,
                 workday = status,
                 groups = cards,

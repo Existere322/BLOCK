@@ -66,7 +66,7 @@ fun OnboardingScreen(vm: ShijieViewModel) {
             .navigationBarsPadding(),
     ) {
         Text(
-            "时界",
+            "BLOCK",
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
             color = CafeWhite,
             style = MaterialTheme.typography.titleMedium,

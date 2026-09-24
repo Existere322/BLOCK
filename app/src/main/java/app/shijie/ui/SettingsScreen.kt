@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.shijie.domain.AppTheme
 import app.shijie.domain.ChinaOfficialCalendar
 import app.shijie.system.ColorOsGuide
 import app.shijie.system.DeviceProfile
@@ -61,6 +62,15 @@ fun SettingsScreen(
             "权限、规则与本机数据都在这里。",
             color = CafeMuted,
             style = MaterialTheme.typography.bodyMedium,
+        )
+        val theme by vm.theme.collectAsStateWithLifecycle()
+        Text("外观", color = CafeInk, style = MaterialTheme.typography.titleMedium)
+        CafeSegmented(
+            labels = listOf("当前", "原先"),
+            selected = if (theme == AppTheme.PREVIOUS) 1 else 0,
+            onSelect = { index ->
+                vm.setTheme(if (index == 1) AppTheme.PREVIOUS else AppTheme.CURRENT)
+            },
         )
         Text("上锁模式", color = CafeInk, style = MaterialTheme.typography.titleMedium)
         OceanCard {

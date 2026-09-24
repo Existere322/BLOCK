@@ -16,7 +16,7 @@ data class ChartColumn(
 /** Turns per-package buckets into stacked columns. Other apps use the default accent. */
 object UsageCategories {
     const val OTHER = "其他"
-    const val OTHER_COLOR = 0xFF82918B.toInt()
+    const val OTHER_COLOR = 0xFFAAB4C2.toInt()
 
     fun stack(
         labels: List<String>,

@@ -21,8 +21,8 @@ android {
         applicationId = "app.shijie"
         minSdk = 29
         targetSdk = 36
-        versionCode = 7
-        versionName = "2.0.1"
+        versionCode = 10
+        versionName = "2.0.4"
     }
 
     signingConfigs {

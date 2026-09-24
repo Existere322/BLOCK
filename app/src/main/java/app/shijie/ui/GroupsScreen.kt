@@ -149,7 +149,7 @@ fun GroupEditorScreen(id: Long, vm: ShijieViewModel, onDone: () -> Unit, onMessa
         )
         return
     }
-    val palette = remember(current.id) { mutableStateListOf<Int>().apply { addAll(GroupPalette) } }
+    val palette = remember(current.id, GroupPalette) { mutableStateListOf<Int>().apply { addAll(GroupPalette) } }
     LaunchedEffect(current.id, current.colorArgb) {
         if (current.colorArgb !in palette) palette.add(current.colorArgb)
     }

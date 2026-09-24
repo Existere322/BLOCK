@@ -9,6 +9,7 @@ import android.telecom.TelecomManager
 import androidx.room.withTransaction
 import app.shijie.domain.BlockWindow
 import app.shijie.domain.DayPolicy
+import app.shijie.domain.DailyUsageBucket
 import app.shijie.domain.ForegroundEvent
 import app.shijie.domain.ForegroundEventKind
 import app.shijie.domain.ForegroundSpan
@@ -20,7 +21,9 @@ import app.shijie.domain.RestrictionGroup
 import app.shijie.domain.Retention
 import app.shijie.domain.SafetyPackages
 import app.shijie.domain.TemporaryOverride
+import app.shijie.domain.AppTheme
 import app.shijie.domain.UsageDay
+import app.shijie.domain.UsageVisibility
 import app.shijie.domain.WorkdayCalendar
 import app.shijie.domain.WorkdayOverride
 import app.shijie.domain.toWeekdayMask
@@ -219,7 +222,14 @@ class MetaStore(private val db: ShijieDatabase) {
         const val ONBOARDING = "onboarding_done"
         const val LAST_EVENT = "last_foreground_event"
         const val LOCK_UNTIL = "lock_until"
+        const val THEME = "theme"
     }
+
+    suspend fun theme(): AppTheme {
+        return if (get(THEME) == AppTheme.PREVIOUS.name) AppTheme.PREVIOUS else AppTheme.CURRENT
+    }
+
+    suspend fun setTheme(theme: AppTheme) = put(THEME, theme.name)
 
     suspend fun lockInstant(): Instant? {
         return get(LOCK_UNTIL)?.toLongOrNull()?.let(Instant::ofEpochMilli)
@@ -380,9 +390,11 @@ class UsageRepository(
     }
 
     /**
-     * 使用 Android 官方聚合接口读取系统前台时长。它负责合并查询范围内
-     * 扩展到的日统计桶，避免自行挑选单条记录时丢失同一应用的统计片段。
-     * null 表示查询失败；调用方保留上次结果，不能把失败当成“今天用时为零”。
+     * Daily buckets come from the system's saved UsageStats. totalTimeInForeground is the
+     * focused time only: visible-but-unfocused time and foreground-service time are not added.
+     * System packages are dropped. queryAndAggregateUsageStats chooses its own interval and can
+     * include adjacent days, so daily buckets are requested and kept only for the local day.
+     * null means the platform query failed; the caller then keeps the last saved result.
      */
     private fun systemTotals(start: Instant, end: Instant): Map<String, Long>? {
         if (!start.isBefore(end)) return emptyMap()
@@ -390,15 +402,28 @@ class UsageRepository(
         val begin = start.toEpochMilli()
         val finish = end.toEpochMilli()
         val stats = try {
-            usageStats().queryAndAggregateUsageStats(begin, finish)
+            usageStats().queryUsageStats(UsageStatsManager.INTERVAL_DAILY, begin, finish)
         } catch (_: SecurityException) {
             return null
         } catch (_: RuntimeException) {
             return null
+        } ?: return null
+        val buckets = stats.map { usage ->
+            DailyUsageBucket(usage.packageName, usage.firstTimeStamp, usage.totalTimeInForeground)
         }
-        return stats.mapNotNull { (packageName, usage) ->
-            usage.totalTimeInForeground.takeIf { it > 0L }?.let { packageName to it }
-        }.toMap()
+        val flags = applicationFlags()
+        return UsageDay.totalsForDate(buckets, UsageDay.localDate(start, clock.zone()), clock.zone())
+            .filter { (packageName, millis) ->
+                millis > 0L && UsageVisibility.includePackage(flags[packageName])
+            }
+    }
+
+    private fun applicationFlags(): Map<String, Int> {
+        return try {
+            context.packageManager.getInstalledApplications(0).associate { it.packageName to it.flags }
+        } catch (_: RuntimeException) {
+            emptyMap()
+        }
     }
 
     private fun readEvents(start: Instant, end: Instant): List<ForegroundEvent> {

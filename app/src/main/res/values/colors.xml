@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#313131</color>
-    <color name="window_background">#F9F9F9</color>
-    <color name="blue_gray">#5C3D2E</color>
-    <color name="amber">#C08552</color>
-    <color name="ink">#3B2416</color>
-    <color name="paper">#FFFBF5</color>
+    <color name="ic_launcher_background">#FFFFFF</color>
+    <color name="window_background">#F6F8FC</color>
+    <color name="blue_gray">#334155</color>
+    <color name="amber">#1468E8</color>
+    <color name="ink">#202833</color>
+    <color name="paper">#FFFFFF</color>
 </resources>
