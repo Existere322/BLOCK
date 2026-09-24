@@ -10,7 +10,7 @@ BLOCK（时界）是一个完全离线的 Android 应用。它按你设定的禁
 SHA-256 142c6eba246afff6ddfbd96f7edf27c2155abe8706c1da61ebe596ac58eda21e
 ```
 
-本项目以 [MIT 许可证](LICENSE) 发布。
+本项目以[非商业许可](LICENSE)发布：可以出于非商业目的使用，不得出售或用于经营活动。
 
 ## 使用方式
 
@@ -90,4 +90,4 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
 
 Copyright (c) 2026 Existere
 
-本仓库以 MIT 许可证授权。你可以自由使用、修改和再分发，但需要保留版权声明和许可全文。完整文本见 [LICENSE](LICENSE)。软件按「原样」提供，不含任何保证。
+本仓库以非商业许可授权。可以出于非商业目的使用、复制和修改，并需要保留版权声明和许可全文。不得出售、放进收费产品，或用于经营活动。完整文本见 [LICENSE](LICENSE)。软件按「原样」提供，不含任何保证。
