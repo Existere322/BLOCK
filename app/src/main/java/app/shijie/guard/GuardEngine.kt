@@ -52,7 +52,10 @@ class GuardEngine(private val graph: AppGraph) {
     private var host: GuardHost? = null
     private var sticky = false
     @Volatile private var session: OpenSession? = null
+    @Volatile var watchIntervalMs: Long = 2_000L
     private var screenOn = true
+    private var watchRunning = false
+    private var lastWatchPackage: String? = null
 
     fun attach(host: GuardHost) {
         this.host = host
@@ -119,7 +122,12 @@ class GuardEngine(private val graph: AppGraph) {
         scope.launch {
             if (!immediate) delay(80)
             if (ticket != generation.get()) return@launch
-            val plan = withContext(Dispatchers.IO) { plan(packageName) }
+            val plan = try {
+                withContext(Dispatchers.IO) { plan(packageName) }
+            } catch (error: Exception) {
+                Log.w(TAG, "plan failed for $packageName: ${error.message}")
+                return@launch
+            }
             if (ticket != generation.get()) return@launch
             apply(plan)
         }
@@ -127,9 +135,7 @@ class GuardEngine(private val graph: AppGraph) {
 
     /** AlarmManager / health-worker entry: re-evaluate a specific or last-known package. */
     fun onEnforcementAlarm(packageName: String) {
-        if (!screenOn) {
-            screenOn = host?.screenInteractive() ?: true
-        }
+        refreshScreen()
         if (!screenOn) return
         val target = packageName.ifBlank { session?.packageName }.orEmpty()
         if (target.isBlank()) {
@@ -140,12 +146,51 @@ class GuardEngine(private val graph: AppGraph) {
     }
 
     fun recheckForeground() {
+        refreshScreen()
         if (!screenOn) return
         scope.launch {
             val resumed = session?.packageName
                 ?: withContext(Dispatchers.IO) { graph.usage.lastResumedPackage() }
                 ?: return@launch
             onForeground(resumed, immediate = true)
+        }
+    }
+
+    /**
+     * While a block window is open, poll the foreground app. After a reboot the
+     * accessibility service may be bound but not receive window events, and the
+     * usage catch-up must not be required before a window block.
+     */
+    fun onWindowWatch() {
+        refreshScreen()
+        if (!screenOn) {
+            watchIntervalMs = 30_000L
+            return
+        }
+        watchIntervalMs = 2_000L
+        if (watchRunning) return
+        watchRunning = true
+        scope.launch {
+            try {
+                val active = withContext(Dispatchers.IO) { anyBlockWindowActive() }
+                if (!active) {
+                    lastWatchPackage = null
+                    return@launch
+                }
+                val pkg = withContext(Dispatchers.IO) {
+                    try {
+                        graph.usage.currentForeground()
+                    } catch (error: Exception) {
+                        Log.w(TAG, "foreground lookup failed: ${error.message}")
+                        null
+                    }
+                } ?: return@launch
+                if (pkg == lastWatchPackage) return@launch
+                lastWatchPackage = pkg
+                onForeground(pkg, immediate = true)
+            } finally {
+                watchRunning = false
+            }
         }
     }
 
@@ -238,6 +283,24 @@ class GuardEngine(private val graph: AppGraph) {
         val calendar = graph.workdays.calendar()
         val today = UsageDay.localDate(now, zone)
         val evaluator = RuleEvaluator(calendar)
+        val early = storedGroups.mapNotNull { stored ->
+            earlyWindowBlock(stored, packageName, now, zone, today, calendar)?.let { stored to it }
+        }
+        if (early.isNotEmpty()) {
+            val blocks = early.map { it.second.decision }
+            val chosenDecision = RestrictionUnion.strictest(blocks) as BlockDecision.Block
+            val chosen = early.first { it.second.decision == chosenDecision }
+            return Plan(
+                packageName = packageName,
+                decision = chosenDecision,
+                group = chosen.first.group,
+                home = home,
+                label = graph.groups.label(packageName),
+                grantsToday = chosen.second.grantsToday,
+                delayMs = null,
+                blocks = blocks,
+            )
+        }
         val judged = storedGroups.map { stored ->
             judge(stored, packageName, now, zone, today, calendar, evaluator, open)
         }
@@ -268,6 +331,52 @@ class GuardEngine(private val graph: AppGraph) {
         )
     }
 
+    private fun refreshScreen() {
+        val interactive = host?.screenInteractive()
+        if (interactive != null) screenOn = interactive
+    }
+
+    private suspend fun anyBlockWindowActive(): Boolean {
+        val now = graph.clock.now()
+        val zone = graph.clock.zone()
+        val calendar = graph.workdays.calendar()
+        return graph.groups.snapshot().any { stored ->
+            GroupSchedule.inBlockWindow(now, zone, stored.group, calendar)
+        }
+    }
+
+    /**
+     * Block windows do not need the usage ledger. After reboot that ledger replays
+     * a long event backlog under one lock; waiting for it used to drop the block.
+     */
+    private suspend fun earlyWindowBlock(
+        stored: app.shijie.data.StoredGroup,
+        packageName: String,
+        now: Instant,
+        zone: java.time.ZoneId,
+        today: java.time.LocalDate,
+        calendar: app.shijie.domain.WorkdayCalendar,
+    ): EarlyBlock? {
+        val group = stored.group
+        if (!GroupSchedule.inBlockWindow(now, zone, group, calendar)) return null
+        val overlapping = graph.overrides.overlapping(group.id, today, zone)
+        val released = overlapping.any {
+            EmergencyRelease.isCurrentlyActive(it, now, graph.clock.bootId(), packageName)
+        }
+        if (released) return null
+        val grants = graph.overrides.grantedOn(group.id, today, zone)
+        val windows = WindowMerger.merge(group.blockWindows)
+        return EarlyBlock(
+            decision = BlockDecision.Block(
+                reason = BlockReason.BLOCK_WINDOW,
+                groupId = group.id,
+                groupName = group.name,
+                endsAt = GroupSchedule.currentWindowEnd(now, zone, windows),
+            ),
+            grantsToday = grants.size,
+        )
+    }
+
     private suspend fun judge(
         stored: app.shijie.data.StoredGroup,
         packageName: String,
@@ -284,7 +393,12 @@ class GuardEngine(private val graph: AppGraph) {
         val active = overlapping.lastOrNull {
             EmergencyRelease.isCurrentlyActive(it, now, graph.clock.bootId(), packageName)
         }
-        val used = graph.usage.quotaUsed(stored.packages.toSet(), group, overlapping, open)
+        val used = try {
+            graph.usage.quotaUsed(stored.packages.toSet(), group, overlapping, open)
+        } catch (error: Exception) {
+            Log.w(TAG, "quota unavailable for ${group.name}: ${error.message}")
+            0L
+        }
         var decision = evaluator.evaluate(
             packageName,
             now,
@@ -321,7 +435,8 @@ class GuardEngine(private val graph: AppGraph) {
 
     private fun apply(plan: Plan) {
         val current = host ?: return
-        if (session?.packageName != plan.packageName) {
+        val sameSession = session?.packageName == plan.packageName
+        if (!sameSession) {
             session = OpenSession(plan.packageName, graph.clock.now())
         }
         when (val decision = plan.decision) {
@@ -343,8 +458,9 @@ class GuardEngine(private val graph: AppGraph) {
             is BlockDecision.Block -> {
                 current.cancelSchedule()
                 EnforcementScheduler.cancel(graph.app)
+                val alreadyShowing = sticky && sameSession
                 sticky = true
-                current.goHome()
+                if (!alreadyShowing) current.goHome()
                 current.showBlock(
                     BlockOverlayModel(
                         packageName = plan.packageName,
@@ -391,6 +507,11 @@ class GuardEngine(private val graph: AppGraph) {
             BlockReason.QUOTA_EXHAUSTED -> "「${decision.groupName}」的今日额度已用完 $untilText".trim()
         }
     }
+
+    private data class EarlyBlock(
+        val decision: BlockDecision.Block,
+        val grantsToday: Int,
+    )
 
     private data class Judged(
         val group: RestrictionGroup,

@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import app.shijie.MainActivity
 import app.shijie.R
+import app.shijie.guard.GuardRecovery
 import app.shijie.guard.ShijieAccessibilityService
 import java.time.Instant
 import java.time.ZoneId
@@ -53,6 +54,7 @@ object Permissions {
     }
 
     fun accessibilityEnabled(context: Context): Boolean {
+        if (GuardRecovery.enabledInSettings(context)) return true
         val manager = context.getSystemService(android.view.accessibility.AccessibilityManager::class.java) ?: return false
         val expected = android.content.ComponentName(context, ShijieAccessibilityService::class.java).flattenToString()
         return manager.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)

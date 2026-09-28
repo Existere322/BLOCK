@@ -3,6 +3,7 @@ package app.shijie.guard
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -16,23 +17,42 @@ import app.shijie.ShijieApp
 import app.shijie.domain.Retention
 import app.shijie.domain.UsageDay
 import app.shijie.system.HealthNotifier
+import app.shijie.widget.refreshUsageChartWidgets
 import java.time.Duration
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.launch
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action !in setOf(Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED)) return
+        if (intent?.action !in BOOT_ACTIONS) return
+        val appContext = context.applicationContext
+        GuardRecovery.nudge(appContext)
         val pending = goAsync()
-        val app = context.applicationContext as ShijieApp
+        val app = appContext as? ShijieApp
+        if (app == null) {
+            pending.finish()
+            return
+        }
         app.graph.scope.launch {
             try {
                 app.graph.overrides.cancelOtherBoots(app.graph.clock.bootId(), app.graph.clock.now())
                 Maintenance.ensure(app)
+                GuardRecovery.nudge(app)
+            } catch (error: Exception) {
+                Log.w("Shijie", "boot recovery failed: ${error.message}")
             } finally {
                 pending.finish()
             }
         }
+    }
+
+    companion object {
+        private val BOOT_ACTIONS = setOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+            "android.intent.action.QUICKBOOT_POWERON",
+            "com.htc.intent.action.QUICKBOOT_POWERON",
+        )
     }
 }
 
@@ -79,10 +99,12 @@ class HealthWorker(
 ) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         HealthNotifier.sync(applicationContext)
+        GuardRecovery.nudge(applicationContext)
         val graph = (applicationContext as? ShijieApp)?.graph
         if (graph != null && graph.guardConnected.value) {
             graph.engine.recheckForeground()
         }
+        refreshUsageChartWidgets(applicationContext)
         return Result.success()
     }
 }

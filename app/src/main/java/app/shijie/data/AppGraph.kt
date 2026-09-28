@@ -3,12 +3,14 @@ package app.shijie.data
 import android.app.Application
 import app.shijie.domain.AppTheme
 import app.shijie.guard.GuardEngine
+import app.shijie.guard.GuardRecovery
 import app.shijie.guard.Maintenance
 import app.shijie.system.HealthNotifier
 import app.shijie.system.SystemAppClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -30,11 +32,18 @@ class AppGraph(val app: Application) {
         HealthNotifier.ensureChannel(app)
         Maintenance.ensure(app)
         HealthNotifier.sync(app)
+        GuardRecovery.nudge(app)
         scope.launch {
             theme.value = meta.theme()
             val stored = meta.get(MetaStore.LAST_EVENT)?.toLongOrNull()
             if (stored != null) lastForegroundEvent.value = stored
             overrides.cancelOtherBoots(clock.bootId(), clock.now())
+        }
+        scope.launch {
+            delay(3_000)
+            GuardRecovery.nudge(app)
+            delay(8_000)
+            GuardRecovery.nudge(app)
         }
     }
 }

@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.shijie.data.RankedApp
+import app.shijie.domain.ChartAxis
 import app.shijie.domain.ChartColumn
 import app.shijie.domain.ChartLayout
 import app.shijie.domain.ChartSlice
@@ -346,13 +347,13 @@ private fun AxisLabels(
     style: androidx.compose.ui.text.TextStyle,
     modifier: Modifier = Modifier,
 ) {
-    val indexes = axisIndexes(columns.size)
+    val indexes = ChartAxis.indexes(columns.size)
     val density = LocalDensity.current
     Layout(
         content = {
             indexes.forEach { index ->
                 Text(
-                    prettyAxisLabel(columns[index].label),
+                    ChartAxis.label(columns[index].label),
                     style = style,
                     maxLines = 1,
                     softWrap = false,
@@ -441,18 +442,6 @@ private fun AppUsageRow(app: RankedApp) {
         )
         Text(formatDurationMinutes(app.millis), color = CafeMuted, style = MaterialTheme.typography.bodyMedium)
     }
-}
-
-private fun axisIndexes(count: Int): List<Int> = when {
-    count <= 1 -> listOf(0)
-    count <= 8 -> (0 until count).toList()
-    count <= 24 -> listOf(0, 6, 12, 18, count - 1).filter { it in 0 until count }.distinct()
-    else -> listOf(0, count / 4, count / 2, (count * 3) / 4, count - 1).filter { it in 0 until count }.distinct()
-}
-
-private fun prettyAxisLabel(raw: String): String {
-    if (raw.length == 2 && raw.all { it.isDigit() }) return "${raw.toInt()}时"
-    return raw
 }
 
 internal fun loadAppIcon(context: Context, packageName: String): ImageBitmap? = try {

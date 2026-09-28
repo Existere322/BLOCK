@@ -74,10 +74,10 @@ fun TodayScreen(vm: ShijieViewModel) {
         data.accessibility -> "还需打开「使用情况访问」"
         else -> "保护未生效 · 系统关闭了无障碍"
     }
-    val detail = if (data.accessibility && data.guardConnected) {
-        "禁用时段与额度耗尽会持续拦截"
-    } else {
-        "拦截依赖系统无障碍服务。ColorOS 省电清理后常会关掉它，点下方恢复即可继续长期自动运行。"
+    val detail = when {
+        data.accessibility && data.guardConnected -> "禁用时段与额度耗尽会持续拦截"
+        data.accessibility -> "无障碍仍开着，正在重新绑定。若一直不拦截，到系统里把时界的无障碍关掉再打开。"
+        else -> "拦截依赖系统无障碍服务。ColorOS 省电清理后常会关掉它，点下方恢复即可继续长期自动运行。"
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize().aboveTabBar(),

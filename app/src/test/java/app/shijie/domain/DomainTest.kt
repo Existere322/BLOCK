@@ -237,6 +237,17 @@ class RuleEvaluatorTest {
     }
 
     @Test
+    fun inBlockWindowFollowsTheScheduleDayNotJustTheClock() {
+        val workday = sample(policy = DayPolicy.LEGAL_WORKDAY, windows = listOf(BlockWindow(23 * 60, 11 * 60)))
+        val calendar = WorkdayCalendar()
+        assertTrue(GroupSchedule.inBlockWindow(instant("2026-03-06T23:30:00"), zone, workday, calendar))
+        assertTrue(GroupSchedule.inBlockWindow(instant("2026-03-07T10:30:00"), zone, workday, calendar))
+        assertFalse(GroupSchedule.inBlockWindow(instant("2026-03-07T12:00:00"), zone, workday, calendar))
+        val disabled = workday.copy(enabled = false)
+        assertFalse(GroupSchedule.inBlockWindow(instant("2026-03-06T23:30:00"), zone, disabled, calendar))
+    }
+
+    @Test
     fun timeZoneChangesWhetherTheSameInstantIsInsideTheWindow() {
         val group = sample(windows = listOf(BlockWindow(30, 60)))
         val now = Instant.parse("2026-01-04T16:30:00Z")

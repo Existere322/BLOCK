@@ -1,6 +1,7 @@
 package app.shijie.data
 
 import android.app.usage.UsageEvents
+import android.util.Log
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
@@ -382,6 +383,13 @@ class UsageRepository(
         return ForegroundSpans.foregroundPackage(events, now)
     }
 
+    /** Foreground package including events since the last catch-up. Used while a block window is open. */
+    suspend fun currentForeground(): String? {
+        if (!Permissions.usageGranted(context)) return null
+        sync(Duration.ZERO)
+        return loadCursor()?.replay?.let(ForegroundSpans::foregroundPackage)
+    }
+
     /**
      * Folds system usage events into the local ledger. Daily UsageStats buckets are not used:
      * on ColorOS those buckets are not aligned to local midnight and omit the open session.
@@ -584,7 +592,8 @@ class UsageRepository(
     private fun readEventSlice(start: Instant, end: Instant): List<ForegroundEvent>? {
         val events = try {
             usageStats().queryEvents(start.toEpochMilli(), end.toEpochMilli())
-        } catch (_: SecurityException) {
+        } catch (error: Exception) {
+            Log.w("Shijie", "usage events unavailable: ${error.message}")
             return null
         } ?: return null
         val raw = UsageEvents.Event()

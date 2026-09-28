@@ -1,6 +1,7 @@
 package app.shijie.guard
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -25,13 +26,25 @@ import app.shijie.theme.Palette
 class ShijieAccessibilityService : AccessibilityService(), GuardHost {
     private val handler = Handler(Looper.getMainLooper())
     private var enforcement: Runnable? = null
+    private val windowWatch = object : Runnable {
+        override fun run() {
+            handler.removeCallbacks(this)
+            if (::engine.isInitialized) engine.onWindowWatch()
+            val delay = if (::engine.isInitialized) engine.watchIntervalMs else 30_000L
+            handler.postDelayed(this, delay)
+        }
+    }
     private lateinit var overlay: OverlayController
     private lateinit var engine: GuardEngine
     private val screenReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) {
             when (intent?.action) {
                 Intent.ACTION_SCREEN_OFF -> engine.onScreenOff()
-                Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> engine.onScreenOn()
+                Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                    engine.onScreenOn()
+                    handler.removeCallbacks(windowWatch)
+                    handler.post(windowWatch)
+                }
             }
         }
     }
@@ -42,6 +55,8 @@ class ShijieAccessibilityService : AccessibilityService(), GuardHost {
         engine = (application as ShijieApp).graph.engine
         overlay = OverlayController(this, engine)
         engine.attach(this)
+        armEvents()
+        GuardRecovery.markArmed(this)
         (application as ShijieApp).graph.guardConnected.value = true
         val filter = android.content.IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -54,6 +69,21 @@ class ShijieAccessibilityService : AccessibilityService(), GuardHost {
             registerReceiver(screenReceiver, filter)
         }
         engine.onConnected()
+        handler.removeCallbacks(windowWatch)
+        handler.post(windowWatch)
+    }
+
+    /**
+     * After reboot the XML config is sometimes not applied, so the service connects
+     * and then receives no window events. Setting it again re-registers the listener.
+     */
+    private fun armEvents() {
+        val info = serviceInfo ?: AccessibilityServiceInfo()
+        info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+        info.flags = info.flags or AccessibilityServiceInfo.DEFAULT
+        info.notificationTimeout = 50
+        serviceInfo = info
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {

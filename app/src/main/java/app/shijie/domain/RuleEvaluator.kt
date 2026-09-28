@@ -36,6 +36,20 @@ object GroupSchedule {
         return zoned.hour * 60 + zoned.minute
     }
 
+    /** True when this group's merged block window covers [now] and today's policy is active. */
+    fun inBlockWindow(
+        now: Instant,
+        zone: ZoneId,
+        group: RestrictionGroup,
+        calendar: WorkdayCalendar,
+    ): Boolean {
+        val windows = WindowMerger.merge(group.blockWindows)
+        if (windows.isEmpty()) return false
+        val scheduleDate = effectiveScheduleDate(now, zone, windows)
+        if (!isActive(group, scheduleDate, calendar)) return false
+        return windows.any { it.contains(minuteOf(now, zone)) }
+    }
+
     fun currentWindowEnd(now: Instant, zone: ZoneId, windows: List<BlockWindow>): Instant? {
         val minute = minuteOf(now, zone)
         val date = now.atZone(zone).toLocalDate()

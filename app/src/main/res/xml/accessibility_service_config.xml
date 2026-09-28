@@ -4,6 +4,7 @@
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault"
     android:canRetrieveWindowContent="false"
+    android:isAccessibilityTool="true"
     android:description="@string/accessibility_description"
     android:notificationTimeout="0"
     android:settingsActivity="app.shijie.MainActivity" />

@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">BLOCK</string>
+    <string name="widget_usage_chart">统计</string>
+    <string name="widget_usage_chart_description">今日使用时长</string>
     <string name="accessibility_description">BLOCK只在窗口切换时读取前台应用的包名，用来判断是否命中你设定的时间规则。它不读取屏幕文字、输入内容或控件树。命中规则时会返回桌面并显示拦截说明。</string>
 </resources>

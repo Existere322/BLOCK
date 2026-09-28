@@ -24,6 +24,7 @@ import app.shijie.domain.AppTheme
 import app.shijie.domain.formatDuration
 import app.shijie.domain.formatDurationMinutes
 import app.shijie.system.Permissions
+import app.shijie.widget.refreshUsageChartWidgets
 import java.time.DayOfWeek
 import java.time.Duration
 import java.time.Instant
@@ -139,6 +140,7 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
         selectPalette(theme)
         viewModelScope.launch {
             withContext(Dispatchers.IO) { graph.meta.setTheme(theme) }
+            refreshUsageChartWidgets(graph.app)
         }
     }
 
@@ -149,6 +151,7 @@ class ShijieViewModel(private val graph: AppGraph) : ViewModel() {
             loadStats()
             refreshLock()
             _workdays.value = withContext(Dispatchers.IO) { graph.workdays.list() }
+            refreshUsageChartWidgets(graph.app)
         }
     }
 

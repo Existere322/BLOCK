@@ -8,10 +8,10 @@ BLOCK（时界）是一个完全离线的 Android 应用。它按你设定的禁
 
 安装包不申请联网权限，没有账号、广告或云同步。规则、使用时长和放行记录只留在这台手机上，默认保存 30 天。
 
-当前版本 **2.0.7**（versionCode 13）。安装包在 [`dist/时界-release.apk`](dist/时界-release.apk)。
+当前版本 **2.1.3**（versionCode 17）。安装包在 [`dist/时界-release.apk`](dist/时界-release.apk)。
 
 ```text
-SHA-256 142c6eba246afff6ddfbd96f7edf27c2155abe8706c1da61ebe596ac58eda21e
+SHA-256 ae4d4ac9658432b879533ac66d513dcb04d28559d9aad328721a777fc77f4203
 ```
 
 本项目以[非商业许可](LICENSE)发布：可以出于非商业目的使用，不得出售或用于经营活动。
@@ -41,6 +41,8 @@ ColorOS 16 上还需要允许完全后台运行、打开自启动，并锁定最
 ### 应急放行
 
 拦截页上，每个分组每天可以放行一次。需要填写理由，并等待 30 秒，然后只放行这一个应用 5 分钟。放行期间仍计入额度。重启手机后，这次放行立刻取消。
+
+重启后如果无障碍开关还在，打开时界会重新绑定服务，禁用时段会继续拦截对应应用。若系统把无障碍条目删掉了，需要再打开一次。可选地执行一次 `adb shell pm grant app.shijie android.permission.WRITE_SECURE_SETTINGS`，之后重启会自动登记回去。
 
 ### 上锁
 

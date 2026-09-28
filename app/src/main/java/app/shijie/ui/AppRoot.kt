@@ -59,7 +59,11 @@ private const val STATS = "stats"
 private const val SETTINGS = "settings"
 
 @Composable
-fun AppRoot(vm: ShijieViewModel) {
+fun AppRoot(
+    vm: ShijieViewModel,
+    openStats: Boolean = false,
+    onStatsOpened: () -> Unit = {},
+) {
     val done by vm.onboardingDone.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -80,12 +84,16 @@ fun AppRoot(vm: ShijieViewModel) {
             CafeSystemBars(darkIconsOnStatus = false, darkIconsOnNavigation = false)
             OnboardingScreen(vm)
         }
-        true -> MainScaffold(vm)
+        true -> MainScaffold(vm, openStats, onStatsOpened)
     }
 }
 
 @Composable
-private fun MainScaffold(vm: ShijieViewModel) {
+private fun MainScaffold(
+    vm: ShijieViewModel,
+    openStats: Boolean,
+    onStatsOpened: () -> Unit,
+) {
     val nav = rememberNavController()
     val snackbar = remember { SnackbarHostState() }
     val entry by nav.currentBackStackEntryAsState()
@@ -95,6 +103,11 @@ private fun MainScaffold(vm: ShijieViewModel) {
     CafeSystemBars(darkIconsOnStatus = !darkStatus, darkIconsOnNavigation = true)
     LaunchedEffect(Unit) {
         vm.messages.collect { snackbar.showSnackbar(it) }
+    }
+    LaunchedEffect(openStats) {
+        if (!openStats) return@LaunchedEffect
+        navigate(nav, STATS)
+        onStatsOpened()
     }
     Scaffold(
         containerColor = CafePage,

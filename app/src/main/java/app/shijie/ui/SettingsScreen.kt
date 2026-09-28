@@ -33,6 +33,7 @@ import app.shijie.system.ColorOsGuide
 import app.shijie.system.DeviceProfile
 import app.shijie.system.GuideAction
 import app.shijie.system.SettingsNavigator
+import app.shijie.widget.requestPinUsageChart
 import java.time.LocalDate
 
 @Composable
@@ -72,6 +73,14 @@ fun SettingsScreen(
                 vm.setTheme(if (index == 1) AppTheme.PREVIOUS else AppTheme.CURRENT)
             },
         )
+        CafeRow(onClick = {
+            if (!requestPinUsageChart(context)) {
+                vm.message("请在桌面长按，打开卡片，在全部卡片的插件里添加「统计」")
+            }
+        }) {
+            Text("添加到桌面", modifier = Modifier.weight(1f), color = CafeInk, style = MaterialTheme.typography.titleMedium)
+            Icon(CafeIcons.Chevron, contentDescription = null, tint = CafeMuted)
+        }
         Text("上锁模式", color = CafeInk, style = MaterialTheme.typography.titleMedium)
         OceanCard {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -115,7 +124,7 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    "如果屏幕亮着却长时间不拦截，多半是 ColorOS 关掉了无障碍——请到「完全后台」和「自启动」里放行时界。",
+                    "重启后若无障碍开关还在，打开时界会重新绑定拦截。若开关被关掉，或屏幕亮着却一直不拦截，请到「完全后台」和「自启动」里放行时界，再把无障碍重新打开一次。",
                     color = CafeMuted,
                     style = MaterialTheme.typography.bodySmall,
                 )

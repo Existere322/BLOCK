@@ -21,8 +21,8 @@ android {
         applicationId = "app.shijie"
         minSdk = 29
         targetSdk = 36
-        versionCode = 13
-        versionName = "2.0.7"
+        versionCode = 17
+        versionName = "2.1.3"
     }
 
     signingConfigs {
@@ -93,6 +93,8 @@ dependencies {
     implementation(libs.compose.material.icons)
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.compose.ui.tooling.preview)
+
+    implementation(libs.androidx.glance.appwidget)
 
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)

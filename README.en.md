@@ -8,10 +8,10 @@ BLOCK (时界) is a fully offline Android app. When a restricted app comes to th
 
 The install package does not request the internet permission. There is no account, no advertising, and no cloud sync. Rules, usage time, and emergency releases stay on this phone, and are kept for 30 days by default.
 
-Current version **2.0.7** (versionCode 13). The package is [`dist/时界-release.apk`](dist/时界-release.apk).
+Current version **2.1.3** (versionCode 17). The package is [`dist/时界-release.apk`](dist/时界-release.apk).
 
 ```text
-SHA-256 142c6eba246afff6ddfbd96f7edf27c2155abe8706c1da61ebe596ac58eda21e
+SHA-256 ae4d4ac9658432b879533ac66d513dcb04d28559d9aad328721a777fc77f4203
 ```
 
 This project is published under the [noncommercial license](LICENSE). You may use it for non-commercial purposes. You may not sell it or use it for a business.
@@ -41,6 +41,8 @@ The checks run in this order: safe app, emergency release, blocked period, daily
 ### Emergency release
 
 On the block page, each group can be released once per day. You write a reason, wait 30 seconds, and then that one app is released for 5 minutes. Time during the release still counts toward the allowance. Restarting the phone cancels the release at once.
+
+After a restart, opening BLOCK rebinds the accessibility service if its switch is still on, so blocked periods keep intercepting the apps in those groups. If ColorOS removed the service, turn it on again. An optional one-time `adb shell pm grant app.shijie android.permission.WRITE_SECURE_SETTINGS` lets BLOCK put that entry back by itself.
 
 ### Lock
 
